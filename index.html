@@ -146,17 +146,17 @@
         let isAuthReady = false; 
         const UNSUBSCRIBE_HANDLERS = {}; 
 
-        // --- UTILITY FUNCTIONS ---
+        // --- UTILITY FUNCTIONS (Global access needed for inline HTML events) ---
 
         /** Shows a custom modal message instead of alert() */
-        function showModal(title, message) {
+        window.showModal = function(title, message) { // EXPOSED TO GLOBAL SCOPE
             document.getElementById('modal-title').textContent = title;
             document.getElementById('modal-body').textContent = message;
             document.getElementById('message-modal').classList.remove('hidden');
         }
 
         /** Hides the custom modal */
-        window.hideModal = function() { 
+        window.hideModal = function() { // EXPOSED TO GLOBAL SCOPE
             document.getElementById('message-modal').classList.add('hidden');
         }
 
@@ -265,10 +265,10 @@
         }
 
 
-        // --- ROUTING AND NAVIGATION ---
+        // --- ROUTING AND NAVIGATION (Global access needed for inline HTML events) ---
 
         /** Navigates the application via hash change. */
-        window.navigate = (path, params = {}) => {
+        window.navigate = (path, params = {}) => { // EXPOSED TO GLOBAL SCOPE
             let hash = `#/${path}`;
             if (params.id) {
                 hash += `?id=${params.id}`;
@@ -556,8 +556,8 @@
                         gameElement.className = 'flex justify-between items-center bg-gray-50 p-3 rounded-lg border';
                         gameElement.innerHTML = `
                             <span class="font-medium text-gray-700">Host: ${game.playerNames['X']}</span>
-                            <!-- IMPORTANT: Ensure the onclick call works and passes doc.id -->
-                            <button onclick="joinTicTacToeGame('${doc.id}')" class="bg-blue-500 text-white text-sm font-semibold py-1 px-3 rounded-md hover:bg-blue-600 transition">
+                            <!-- FIX: Button now calls global window.joinTicTacToeGame -->
+                            <button onclick="window.joinTicTacToeGame('${doc.id}')" class="bg-blue-500 text-white text-sm font-semibold py-1 px-3 rounded-md hover:bg-blue-600 transition">
                                 Join (as O)
                             </button>
                         `;
@@ -571,8 +571,8 @@
             });
         }
 
-        // FIX: Added robust error handling to surface issues that cause silent failure.
-        async function joinTicTacToeGame(gameId) {
+        // FIX: EXPOSE TO WINDOW SCOPE for onclick handlers to find it.
+        window.joinTicTacToeGame = async function(gameId) {
             const path = getCollectionPath(TTTOE_COLLECTION, true);
             if (!path) return;
 
@@ -1291,8 +1291,8 @@
                         gameElement.className = 'flex justify-between items-center bg-gray-50 p-3 rounded-lg border';
                         gameElement.innerHTML = `
                             <span class="font-medium text-gray-700">Host: ${game.player1Name}</span>
-                            <!-- IMPORTANT: Ensure the onclick call works and passes doc.id -->
-                            <button onclick="joinRPSGame('${doc.id}')" class="bg-blue-500 text-white text-sm font-semibold py-1 px-3 rounded-md hover:bg-blue-600 transition">
+                            <!-- FIX: Button now calls global window.joinRPSGame -->
+                            <button onclick="window.joinRPSGame('${doc.id}')" class="bg-blue-500 text-white text-sm font-semibold py-1 px-3 rounded-md hover:bg-blue-600 transition">
                                 Join
                             </button>
                         `;
@@ -1306,8 +1306,8 @@
             });
         }
 
-        // FIX: Added robust error handling to surface issues that cause silent failure.
-        async function joinRPSGame(gameId) {
+        // FIX: EXPOSE TO WINDOW SCOPE for onclick handlers to find it.
+        window.joinRPSGame = async function(gameId) {
             const path = getCollectionPath(RPS_COLLECTION, true);
             if (!path) return;
 
@@ -1411,7 +1411,7 @@
                 } else if (game.status === 'playing') {
                     if (playerCommit) {
                         statusEl.textContent = 'Choice committed. Waiting for opponent...';
-                        actionArea.innerHTML = `<button onclick="revealRPSChoice('${gameId}', ${isP1})" class="w-full bg-orange-500 text-white font-semibold py-3 rounded-lg hover:bg-orange-600 transition shadow-md" ${opponentCommit ? '' : 'disabled'}>
+                        actionArea.innerHTML = `<button onclick="window.revealRPSChoice('${gameId}', ${isP1})" class="w-full bg-orange-500 text-white font-semibold py-3 rounded-lg hover:bg-orange-600 transition shadow-md" ${opponentCommit ? '' : 'disabled'}>
                             ${opponentCommit ? 'Click to REVEAL (Opponent ready!)' : 'Waiting for opponent to commit...'}
                         </button>`;
                     } else {
@@ -1424,7 +1424,7 @@
                         actionArea.innerHTML = '';
                     } else {
                         statusEl.textContent = 'REVEAL your choice!';
-                        actionArea.innerHTML = `<button onclick="revealRPSChoice('${gameId}', ${isP1})" class="w-full bg-orange-500 text-white font-semibold py-3 rounded-lg hover:bg-orange-600 transition shadow-md">
+                        actionArea.innerHTML = `<button onclick="window.revealRPSChoice('${gameId}', ${isP1})" class="w-full bg-orange-500 text-white font-semibold py-3 rounded-lg hover:bg-orange-600 transition shadow-md">
                             Click to REVEAL
                         </button>`;
                     }
@@ -1438,7 +1438,7 @@
                         resultText = `${game.winner === game.player1Id ? game.player1Name : game.player2Name} Wins!`;
                     }
                     statusEl.textContent = resultText;
-                    actionArea.innerHTML = `<button onclick="resetRPSGame('${gameId}')" class="w-full bg-green-600 text-white font-semibold py-3 rounded-lg hover:bg-green-700 transition shadow-md">
+                    actionArea.innerHTML = `<button onclick="window.resetRPSGame('${gameId}')" class="w-full bg-green-600 text-white font-semibold py-3 rounded-lg hover:bg-green-700 transition shadow-md">
                         Start Next Round
                     </button>`;
                 }
@@ -1449,7 +1449,7 @@
             container.innerHTML = `
                 <div class="flex justify-around space-x-2">
                     ${Object.keys(RPS_CHOICES).map(choice => `
-                        <button onclick="commitRPSChoice('${gameId}', '${choice}', ${isP1})" class="rps-choice bg-white shadow-md hover:shadow-lg">
+                        <button onclick="window.commitRPSChoice('${gameId}', '${choice}', ${isP1})" class="rps-choice bg-white shadow-md hover:shadow-lg">
                             <div class="text-5xl">${RPS_CHOICES[choice].icon}</div>
                             <span class="text-sm font-semibold capitalize">${choice}</span>
                         </button>
@@ -1458,7 +1458,8 @@
             `;
         }
 
-        async function commitRPSChoice(gameId, choice, isP1) {
+        // FIX: EXPOSE TO WINDOW SCOPE for onclick handlers to find it.
+        window.commitRPSChoice = async function(gameId, choice, isP1) {
             const path = getCollectionPath(RPS_COLLECTION, true);
             if (!path) return;
             const gameRef = doc(db, path, gameId);
@@ -1483,7 +1484,8 @@
             }
         }
         
-        async function revealRPSChoice(gameId, isP1) {
+        // FIX: EXPOSE TO WINDOW SCOPE for onclick handlers to find it.
+        window.revealRPSChoice = async function(gameId, isP1) {
             const path = getCollectionPath(RPS_COLLECTION, true);
             if (!path) return;
             const gameRef = doc(db, path, gameId);
@@ -1538,7 +1540,8 @@
             }).catch(e => console.error("Error setting winner:", e));
         }
 
-        async function resetRPSGame(gameId) {
+        // FIX: EXPOSE TO WINDOW SCOPE for onclick handlers to find it.
+        window.resetRPSGame = async function(gameId) {
             const path = getCollectionPath(RPS_COLLECTION, true);
             if (!path) return;
             const gameRef = doc(db, path, gameId);
