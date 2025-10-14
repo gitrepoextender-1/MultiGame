@@ -1,0 +1,854 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Firebase Game Hub</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom styles for games and mobile */
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f7f9fb;
+        }
+        .game-card {
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+        .game-card:hover {
+            transform: translateY(-4px) scale(1.02);
+            box-shadow: 0 10px 20px rgba(0,0,0,0.1);
+        }
+        .tttoe-cell {
+            width: 80px;
+            height: 80px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 3rem;
+            font-weight: 800;
+            cursor: pointer;
+            border: 2px solid #cbd5e1;
+            transition: background-color 0.1s;
+        }
+        .tttoe-cell:hover:not(.occupied) {
+            background-color: #eff6ff;
+        }
+        /* Memory Game Tile Styles */
+        .memory-tile {
+            width: 80px;
+            height: 80px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            border-radius: 8px;
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: white;
+            transition: transform 0.3s ease, background-color 0.3s ease;
+            transform-style: preserve-3d;
+            background-color: #3b82f6;
+            cursor: pointer;
+        }
+        .memory-tile.flipped {
+            background-color: #10b981;
+            transform: rotateY(180deg);
+        }
+        .memory-tile.matched {
+            background-color: #f59e0b;
+            cursor: default;
+        }
+        .memory-tile-inner {
+            transform: rotateY(180deg); /* Text is visible only when flipped */
+        }
+    </style>
+</head>
+<body class="min-h-screen p-4 md:p-8">
+
+    <header class="mb-8 flex justify-between items-center flex-wrap">
+        <h1 id="header-title" class="text-3xl font-extrabold text-blue-600 cursor-pointer" onclick="navigate('home')">
+            🎮 Game Hub
+        </h1>
+        <div id="auth-info" class="flex items-center space-x-3 mt-4 md:mt-0">
+            <!-- Auth status will be rendered here -->
+        </div>
+    </header>
+
+    <main id="app-container" class="max-w-4xl mx-auto"></main>
+
+    <!-- Modal for general messages/errors -->
+    <div id="message-modal" class="fixed inset-0 bg-gray-900 bg-opacity-75 hidden flex items-center justify-center p-4 z-50">
+        <div class="bg-white p-6 rounded-xl shadow-2xl max-w-sm w-full">
+            <h3 id="modal-title" class="text-xl font-bold mb-3 text-gray-800"></h3>
+            <p id="modal-body" class="text-gray-600 mb-6"></p>
+            <button onclick="hideModal()" class="w-full bg-blue-600 text-white font-semibold py-2 rounded-lg hover:bg-blue-700 transition">Close</button>
+        </div>
+    </div>
+
+
+    <script type="module">
+        // --- FIREBASE IMPORTS ---
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, query, addDoc, updateDoc, deleteDoc, where, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // setLogLevel('Debug'); // Uncomment for Firestore debug logs
+
+        // --- GLOBAL VARIABLES (Canvas Mandate & User Config Structure) ---
+        // These variables are provided by the Canvas environment for authentication and app context.
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+            apiKey: "AIzaSyC85wey_dOt8uiOyjxOdzwmdLPxK0qlav4",
+            authDomain: "multigame-a032d.firebaseapp.com",
+            projectId: "multigame-a032d",
+            storageBucket: "multigame-a032d.firebasestorage.app",
+            messagingSenderId: "51842272357",
+            appId: "1:51842272357:web:c8951b57e3a729f8db4a8c",
+            measurementId: "G-GJPMKV1XX0"
+        };
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        // --- FIREBASE INITIALIZATION ---
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+
+        // --- APPLICATION STATE ---
+        let currentUser = null;
+        let userId = 'anonymous'; // Default state before auth resolves
+
+        // --- UTILITY FUNCTIONS ---
+
+        /** Shows a custom modal message instead of alert() */
+        function showModal(title, message) {
+            document.getElementById('modal-title').textContent = title;
+            document.getElementById('modal-body').textContent = message;
+            document.getElementById('message-modal').classList.remove('hidden');
+        }
+
+        /** Hides the custom modal */
+        function hideModal() {
+            document.getElementById('message-modal').classList.add('hidden');
+        }
+
+        /** Helper for creating Firestore paths */
+        const getCollectionPath = (collectionName, isPublic = true, specificUserId = null) => {
+            if (isPublic) {
+                return `artifacts/${appId}/public/data/${collectionName}`;
+            }
+            // Private path logic
+            const currentUserId = specificUserId || userId;
+            if (currentUserId === 'anonymous') {
+                showModal("Authentication Error", "Cannot access private data anonymously. Please sign up or log in.");
+                return null;
+            }
+            return `artifacts/${appId}/users/${currentUserId}/${collectionName}`;
+        };
+
+        // --- AUTHENTICATION LOGIC ---
+
+        /** Renders the user status and controls in the header. */
+        function renderAuthInfo() {
+            const container = document.getElementById('auth-info');
+            container.innerHTML = '';
+            
+            if (currentUser) {
+                // Logged in/Authenticated state
+                const emailDisplay = currentUser.email ? currentUser.email : `User ID: ${currentUser.uid.substring(0, 8)}...`;
+                const userElement = document.createElement('span');
+                userElement.className = 'text-sm font-medium text-gray-700 truncate max-w-[100px] md:max-w-none';
+                userElement.textContent = currentUser.email ? emailDisplay : 'Guest User';
+                userElement.title = `Full User ID: ${currentUser.uid}`;
+
+                const logoutButton = document.createElement('button');
+                logoutButton.className = 'bg-red-500 hover:bg-red-600 text-white font-semibold py-2 px-3 rounded-lg transition text-sm shadow';
+                logoutButton.textContent = 'Logout';
+                logoutButton.onclick = async () => {
+                    await signOut(auth);
+                    navigate('home');
+                };
+
+                container.append(userElement, logoutButton);
+
+            } else {
+                // Logged out/Anonymous state
+                const loginButton = document.createElement('button');
+                loginButton.className = 'bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-lg transition text-sm shadow';
+                loginButton.textContent = 'Login / Signup';
+                loginButton.onclick = () => navigate('auth');
+                container.appendChild(loginButton);
+            }
+        }
+
+        /** Initializes Firebase Authentication and listens for state changes. */
+        async function initializeAuth() {
+            if (initialAuthToken) {
+                try {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                } catch (error) {
+                    console.error("Custom token sign-in failed, falling back to anonymous.", error);
+                    await signInAnonymously(auth);
+                }
+            } else {
+                await signInAnonymously(auth);
+            }
+
+            onAuthStateChanged(auth, (user) => {
+                currentUser = user;
+                userId = user ? user.uid : 'anonymous';
+                renderAuthInfo();
+                handleNavigation(); // Rerender current view based on new auth state
+            });
+        }
+
+        // --- ROUTING AND NAVIGATION ---
+
+        /** Navigates the application via hash change. */
+        window.navigate = (path, params = {}) => {
+            let hash = `#/${path}`;
+            if (path === 'tictactoe' && params.id) {
+                hash += `?id=${params.id}`;
+            } else if (path === 'tictactoe-lobby') {
+                // No change needed
+            }
+            window.location.hash = hash;
+        };
+
+        /** Handles hash change events to load the correct component. */
+        function handleNavigation() {
+            const hash = window.location.hash.substring(1) || '/home';
+            const [path, queryString] = hash.split('?');
+            const [gameName, gameId] = path.substring(1).split('/');
+
+            const params = {};
+            if (queryString) {
+                new URLSearchParams(queryString).forEach((value, key) => {
+                    params[key] = value;
+                });
+            }
+
+            const container = document.getElementById('app-container');
+            container.innerHTML = '';
+
+            switch (gameName) {
+                case 'home':
+                    renderDashboard(container);
+                    break;
+                case 'auth':
+                    renderAuthForm(container);
+                    break;
+                case 'tictactoe-lobby':
+                    renderTicTacToeLobby(container);
+                    break;
+                case 'tictactoe':
+                    if (params.id) {
+                        renderTicTacToeGame(container, params.id);
+                    } else {
+                        navigate('tictactoe-lobby');
+                    }
+                    break;
+                case 'memory':
+                    renderMemoryGame(container);
+                    break;
+                default:
+                    renderDashboard(container);
+            }
+        }
+
+        window.addEventListener('hashchange', handleNavigation);
+
+        // --- DASHBOARD/HOME VIEW ---
+
+        function renderDashboard(container) {
+            container.innerHTML = `
+                <div class="text-center mb-8">
+                    <h2 class="text-4xl font-extrabold text-gray-900 mb-2">Welcome to the Game Hub</h2>
+                    <p class="text-gray-600">Choose a game below to get started. ${currentUser ? 'Your User ID is: ' + userId : 'Please log in to save high scores and use multiplayer features.'}</p>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+                    <!-- Tic-Tac-Toe Card -->
+                    <div id="card-tictactoe" class="game-card bg-white p-6 rounded-xl shadow-lg border border-blue-100" onclick="navigate('tictactoe-lobby')">
+                        <div class="text-5xl mb-4 text-blue-600">
+                            <span class="inline-block transform rotate-6">✖️</span>
+                            <span class="inline-block transform -rotate-6">⭕</span>
+                        </div>
+                        <h3 class="text-2xl font-bold mb-2">Tic-Tac-Toe</h3>
+                        <p class="text-gray-500">Real-time multiplayer fun. Challenge a friend!</p>
+                        <span class="mt-4 inline-block text-sm font-semibold text-blue-500">Start Game →</span>
+                    </div>
+
+                    <!-- Memory Match Card -->
+                    <div id="card-memory" class="game-card bg-white p-6 rounded-xl shadow-lg border border-green-100" onclick="navigate('memory')">
+                        <div class="text-5xl mb-4 text-green-600">🧠</div>
+                        <h3 class="text-2xl font-bold mb-2">Memory Match</h3>
+                        <p class="text-gray-500">Test your memory. High score saved (login required).</p>
+                        <span class="mt-4 inline-block text-sm font-semibold text-green-500">Play Solo →</span>
+                    </div>
+
+                    <!-- Placeholder/Future Game Card -->
+                    <div class="bg-white p-6 rounded-xl shadow-lg border border-gray-100 opacity-60">
+                        <div class="text-5xl mb-4 text-gray-400">❓</div>
+                        <h3 class="text-2xl font-bold mb-2">Future Game</h3>
+                        <p class="text-gray-500">Coming soon... Maybe an asteroid dodger?</p>
+                        <span class="mt-4 inline-block text-sm font-semibold text-gray-400">Unavailable</span>
+                    </div>
+                </div>
+            `;
+        }
+
+        // --- AUTH FORM VIEW ---
+
+        function renderAuthForm(container) {
+            if (currentUser && !currentUser.isAnonymous) {
+                container.innerHTML = '<div class="text-center p-8">You are already logged in!</div>';
+                setTimeout(() => navigate('home'), 1500);
+                return;
+            }
+
+            container.innerHTML = `
+                <div class="max-w-md mx-auto bg-white p-8 rounded-xl shadow-xl border border-gray-100">
+                    <h2 class="text-3xl font-bold text-center mb-6 text-gray-800" id="auth-heading">Login</h2>
+                    <form id="auth-form" class="space-y-4">
+                        <div>
+                            <label for="auth-email" class="block text-sm font-medium text-gray-700">Email</label>
+                            <input type="email" id="auth-email" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                        </div>
+                        <div>
+                            <label for="auth-password" class="block text-sm font-medium text-gray-700">Password</label>
+                            <input type="password" id="auth-password" required minlength="6" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                        </div>
+                        <button type="submit" id="auth-submit-btn" class="w-full bg-blue-600 text-white font-semibold py-2 rounded-lg hover:bg-blue-700 transition shadow-md">Login</button>
+                    </form>
+                    <div class="text-center mt-4">
+                        <button id="toggle-auth-btn" class="text-sm text-blue-600 hover:text-blue-700 transition">
+                            Don't have an account? Switch to Signup
+                        </button>
+                    </div>
+                </div>
+            `;
+
+            const form = document.getElementById('auth-form');
+            const heading = document.getElementById('auth-heading');
+            const submitBtn = document.getElementById('auth-submit-btn');
+            const toggleBtn = document.getElementById('toggle-auth-btn');
+
+            let isLogin = true;
+
+            const toggleMode = () => {
+                isLogin = !isLogin;
+                heading.textContent = isLogin ? 'Login' : 'Signup';
+                submitBtn.textContent = isLogin ? 'Login' : 'Create Account';
+                toggleBtn.textContent = isLogin ? "Don't have an account? Switch to Signup" : "Already have an account? Switch to Login";
+            };
+
+            toggleBtn.onclick = toggleMode;
+
+            form.onsubmit = async (e) => {
+                e.preventDefault();
+                const email = document.getElementById('auth-email').value;
+                const password = document.getElementById('auth-password').value;
+
+                try {
+                    if (isLogin) {
+                        await signInWithEmailAndPassword(auth, email, password);
+                        showModal("Success", "Logged in successfully! Redirecting to home.");
+                    } else {
+                        await createUserWithEmailAndPassword(auth, email, password);
+                        showModal("Success", "Account created and logged in! Redirecting to home.");
+                    }
+                    setTimeout(() => navigate('home'), 1000);
+                } catch (error) {
+                    const errorMessage = error.message.replace('Firebase: Error (auth/', '').replace(/\)./, '');
+                    showModal("Authentication Failed", errorMessage);
+                    console.error("Auth error:", error);
+                }
+            };
+        }
+
+        // ----------------------------------------------------
+        // --- GAME 1: TIC-TAC-TOE (Multiplayer, Public Data) ---
+        // ----------------------------------------------------
+
+        const TTTOE_COLLECTION = 'tictactoe_games';
+
+        function renderTicTacToeLobby(container) {
+            if (!currentUser || currentUser.isAnonymous) {
+                container.innerHTML = `
+                    <div class="text-center p-8 bg-yellow-100 rounded-xl shadow-lg border-yellow-300 border-l-4">
+                        <h3 class="text-xl font-bold text-yellow-800 mb-4">Multiplayer requires sign-in</h3>
+                        <p class="text-gray-600 mb-4">Please <a href="#/auth" class="text-blue-600 font-semibold hover:underline">log in or sign up</a> with Email/Password to create or join a real-time multiplayer game.</p>
+                        <button onclick="navigate('home')" class="bg-gray-400 text-white font-semibold py-2 px-4 rounded-lg hover:bg-gray-500 transition">Go Back</button>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = `
+                <div class="text-center mb-8">
+                    <h2 class="text-3xl font-bold text-gray-900">Tic-Tac-Toe Lobby</h2>
+                    <p class="text-gray-600">Create a new game or join an open challenge.</p>
+                </div>
+                <div class="max-w-xl mx-auto space-y-4">
+                    <button id="create-game-btn" class="w-full bg-green-600 text-white font-semibold py-3 rounded-lg hover:bg-green-700 transition shadow-lg">
+                        ➕ Create New Game
+                    </button>
+                    <div class="bg-white p-4 rounded-xl shadow-md">
+                        <h3 class="text-xl font-semibold mb-3">Open Games</h3>
+                        <div id="open-games-list" class="space-y-2">
+                            <p class="text-gray-500 text-center">Loading open games...</p>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            document.getElementById('create-game-btn').onclick = createTicTacToeGame;
+            listenForOpenGames();
+        }
+
+        async function createTicTacToeGame() {
+            const path = getCollectionPath(TTTOE_COLLECTION);
+            if (!path) return;
+
+            const newGame = {
+                board: Array(9).fill(null),
+                status: 'waiting', // 'waiting', 'playing', 'win', 'draw'
+                playerX: userId,
+                playerO: null,
+                currentTurn: 'X',
+                creatorEmail: currentUser.email || 'Guest',
+                createdAt: new Date().toISOString(),
+                winner: null,
+                players: {}, // To store player data, e.g., { [userId]: { symbol: 'X' } }
+                playerNames: { 'X': currentUser.email || `User ${userId.substring(0, 4)}` }
+            };
+
+            try {
+                const docRef = await addDoc(collection(db, path), newGame);
+                navigate('tictactoe', { id: docRef.id });
+            } catch (error) {
+                showModal("Game Creation Failed", "Could not create game session. Check console for details.");
+                console.error("Error creating game:", error);
+            }
+        }
+
+        function listenForOpenGames() {
+            const path = getCollectionPath(TTTOE_COLLECTION);
+            if (!path) return;
+
+            const q = query(collection(db, path), where("status", "==", "waiting"));
+            const listContainer = document.getElementById('open-games-list');
+
+            onSnapshot(q, (snapshot) => {
+                listContainer.innerHTML = '';
+                if (snapshot.empty) {
+                    listContainer.innerHTML = '<p class="text-gray-500 text-center p-4">No open games found. Be the first to create one!</p>';
+                    return;
+                }
+
+                snapshot.forEach(doc => {
+                    const game = doc.data();
+                    if (game.playerX !== userId) { // Only show games not created by the current user
+                        const gameElement = document.createElement('div');
+                        gameElement.className = 'flex justify-between items-center bg-gray-50 p-3 rounded-lg border';
+                        gameElement.innerHTML = `
+                            <span class="font-medium text-gray-700">Host: ${game.playerNames['X']}</span>
+                            <button onclick="joinTicTacToeGame('${doc.id}')" class="bg-blue-500 text-white text-sm font-semibold py-1 px-3 rounded-md hover:bg-blue-600 transition">
+                                Join (as O)
+                            </button>
+                        `;
+                        listContainer.appendChild(gameElement);
+                    }
+                });
+            });
+        }
+
+        async function joinTicTacToeGame(gameId) {
+            const path = getCollectionPath(TTTOE_COLLECTION);
+            if (!path) return;
+
+            const gameRef = doc(db, path, gameId);
+            try {
+                await updateDoc(gameRef, {
+                    playerO: userId,
+                    status: 'playing',
+                    playerNames: {
+                        'X': (await getDoc(gameRef)).data().playerNames['X'],
+                        'O': currentUser.email || `User ${userId.substring(0, 4)}`
+                    }
+                });
+                navigate('tictactoe', { id: gameId });
+            } catch (error) {
+                showModal("Joining Failed", "Could not join this game. It might have just filled up.");
+                console.error("Error joining game:", error);
+            }
+        }
+
+        function renderTicTacToeGame(container, gameId) {
+            container.innerHTML = `
+                <div class="max-w-md mx-auto p-6 bg-white rounded-xl shadow-2xl border border-gray-100 text-center">
+                    <h2 class="text-3xl font-extrabold mb-4 text-blue-600">Tic-Tac-Toe</h2>
+                    <div id="game-status" class="text-xl font-semibold mb-4 text-gray-800">Loading Game...</div>
+                    <div id="game-info" class="text-sm text-gray-500 mb-6"></div>
+                    <div id="tttoe-board" class="grid grid-cols-3 gap-1 mx-auto max-w-xs border-4 border-gray-300 p-1 rounded-lg">
+                        <!-- Cells will be generated here -->
+                    </div>
+                    <div id="action-buttons" class="mt-8 space-y-3">
+                        <button onclick="navigate('tictactoe-lobby')" class="w-full bg-gray-500 text-white font-semibold py-2 px-4 rounded-lg hover:bg-gray-600 transition shadow">
+                            ← Back to Lobby
+                        </button>
+                        <button id="delete-game-btn" class="w-full bg-red-500 text-white font-semibold py-2 px-4 rounded-lg hover:bg-red-600 transition shadow hidden">
+                            Delete Game
+                        </button>
+                    </div>
+                </div>
+            `;
+            listenForTicTacToeUpdates(gameId);
+        }
+
+        let unsubscribeTicTacToe = null;
+
+        function listenForTicTacToeUpdates(gameId) {
+            if (unsubscribeTicTacToe) unsubscribeTicTacToe(); // Cleanup previous listener
+
+            const path = getCollectionPath(TTTOE_COLLECTION);
+            if (!path) return;
+
+            const gameRef = doc(db, path, gameId);
+            const boardContainer = document.getElementById('tttoe-board');
+            const statusElement = document.getElementById('game-status');
+            const infoElement = document.getElementById('game-info');
+            const deleteBtn = document.getElementById('delete-game-btn');
+
+            unsubscribeTicTacToe = onSnapshot(gameRef, (docSnap) => {
+                if (!docSnap.exists()) {
+                    showModal("Game Ended", "This game session was deleted by the host.");
+                    navigate('tictactoe-lobby');
+                    return;
+                }
+
+                const game = docSnap.data();
+                const playerSymbol = game.playerX === userId ? 'X' : (game.playerO === userId ? 'O' : null);
+                
+                // Show delete button only to host and if game is finished/abandoned
+                deleteBtn.classList.add('hidden');
+                if (game.playerX === userId && (game.status === 'win' || game.status === 'draw' || game.playerO === null)) {
+                    deleteBtn.classList.remove('hidden');
+                    deleteBtn.onclick = () => deleteDoc(gameRef).catch(e => console.error("Error deleting:", e));
+                }
+
+
+                // Update status and info
+                let statusText = '';
+                let infoText = `Game ID: ${gameId}`;
+                let isGameActive = true;
+
+                if (game.status === 'waiting') {
+                    statusText = `Waiting for Player O... (Host: ${game.playerNames['X']})`;
+                    isGameActive = false;
+                } else if (game.status === 'playing') {
+                    const myTurn = game.currentTurn === playerSymbol;
+                    statusText = myTurn ? `Your Turn (${playerSymbol})` : `Opponent's Turn (${game.currentTurn})`;
+                    infoText = `X: ${game.playerNames['X']} | O: ${game.playerNames['O']}`;
+                } else if (game.status === 'win') {
+                    statusText = `Winner: ${game.winner === playerSymbol ? 'You' : game.winner} (${game.playerNames[game.winner]})!`;
+                    isGameActive = false;
+                } else if (game.status === 'draw') {
+                    statusText = 'Game Draw!';
+                    isGameActive = false;
+                }
+                
+                statusElement.textContent = statusText;
+                infoElement.innerHTML = infoText + `<br>Full ID: <span class="text-xs text-gray-400">${docSnap.id}</span>`;
+
+                // Render board
+                boardContainer.innerHTML = '';
+                game.board.forEach((cell, index) => {
+                    const cellEl = document.createElement('div');
+                    cellEl.className = `tttoe-cell ${cell ? 'occupied' : ''} ${cell === 'X' ? 'text-blue-500' : (cell === 'O' ? 'text-red-500' : 'text-gray-900')}`;
+                    cellEl.textContent = cell || '';
+                    cellEl.onclick = () => makeTicTacToeMove(gameId, game, index, playerSymbol, isGameActive);
+                    boardContainer.appendChild(cellEl);
+                });
+            }, (error) => {
+                console.error("TicTacToe Stream Error:", error);
+                showModal("Connection Error", "Lost connection to the game. Try refreshing.");
+            });
+        }
+
+        async function makeTicTacToeMove(gameId, game, index, playerSymbol, isGameActive) {
+            if (!isGameActive || !playerSymbol) {
+                if (!playerSymbol) showModal("Spectator Mode", "You are not a player in this game.");
+                return;
+            }
+
+            if (game.board[index] !== null) return;
+            if (game.currentTurn !== playerSymbol) {
+                showModal("Not Your Turn", `It is ${game.currentTurn}'s turn.`);
+                return;
+            }
+
+            const newBoard = [...game.board];
+            newBoard[index] = playerSymbol;
+
+            let newStatus = 'playing';
+            let newWinner = null;
+            
+            // Check for win condition
+            const winningCombos = [
+                [0, 1, 2], [3, 4, 5], [6, 7, 8], // Rows
+                [0, 3, 6], [1, 4, 7], [2, 5, 8], // Columns
+                [0, 4, 8], [2, 4, 6]             // Diagonals
+            ];
+
+            for (const combo of winningCombos) {
+                if (newBoard[combo[0]] && newBoard[combo[0]] === newBoard[combo[1]] && newBoard[combo[0]] === newBoard[combo[2]]) {
+                    newStatus = 'win';
+                    newWinner = playerSymbol;
+                    break;
+                }
+            }
+
+            // Check for draw
+            if (newStatus !== 'win' && newBoard.every(cell => cell !== null)) {
+                newStatus = 'draw';
+            }
+
+            const path = getCollectionPath(TTTOE_COLLECTION);
+            if (!path) return;
+            const gameRef = doc(db, path, gameId);
+
+            try {
+                await updateDoc(gameRef, {
+                    board: newBoard,
+                    currentTurn: playerSymbol === 'X' ? 'O' : 'X',
+                    status: newStatus,
+                    winner: newWinner,
+                });
+            } catch (error) {
+                showModal("Move Failed", "Could not register move. Check console.");
+                console.error("Error updating game state:", error);
+            }
+        }
+
+
+        // ----------------------------------------------------
+        // --- GAME 2: MEMORY MATCH (Single Player, Private Data) ---
+        // ----------------------------------------------------
+
+        const MEMORY_SCORE_COLLECTION = 'memory_scores';
+        let memoryGame = {
+            tiles: [],
+            moves: 0,
+            flipped: [],
+            matched: [],
+            gameActive: false,
+            highScore: null,
+            highScoreDocId: null,
+        };
+
+        function setupMemoryGame() {
+            const symbols = ['🍎', '🍌', '🥝', '🍉', '🍍', '🥭', '🍇', '🍓'];
+            let tiles = [...symbols, ...symbols]
+                .sort(() => 0.5 - Math.random()) // Shuffle
+                .map((symbol, id) => ({ id, symbol, isFlipped: false, isMatched: false }));
+
+            memoryGame = {
+                tiles,
+                moves: 0,
+                flipped: [],
+                matched: [],
+                gameActive: true,
+                highScore: memoryGame.highScore, // Preserve high score
+                highScoreDocId: memoryGame.highScoreDocId, // Preserve doc ID
+            };
+        }
+
+        function renderMemoryGame(container) {
+            container.innerHTML = `
+                <div class="max-w-3xl mx-auto p-6 bg-white rounded-xl shadow-2xl border border-green-100 text-center">
+                    <h2 class="text-3xl font-extrabold mb-4 text-green-600">Memory Match</h2>
+                    <div class="flex justify-between items-center mb-6 text-gray-700 font-semibold text-lg">
+                        <span id="memory-moves">Moves: 0</span>
+                        <span id="memory-score">High Score: N/A</span>
+                    </div>
+
+                    <div id="memory-board" class="grid grid-cols-4 md:grid-cols-6 gap-3 mx-auto max-w-lg">
+                        <!-- Tiles render here -->
+                    </div>
+
+                    <div id="game-message" class="mt-6 text-xl font-bold text-red-500"></div>
+
+                    <button id="memory-start-btn" class="mt-8 w-full md:w-1/2 bg-green-600 text-white font-semibold py-3 rounded-lg hover:bg-green-700 transition shadow-lg">
+                        Start New Game
+                    </button>
+                </div>
+            `;
+            document.getElementById('memory-start-btn').onclick = () => {
+                setupMemoryGame();
+                renderMemoryBoard();
+                document.getElementById('memory-start-btn').textContent = "Restart Game";
+                document.getElementById('game-message').textContent = "";
+            };
+
+            listenForHighScore();
+            renderMemoryBoard(); // Initial render
+        }
+
+        function renderMemoryBoard() {
+            const boardContainer = document.getElementById('memory-board');
+            if (!boardContainer) return;
+
+            boardContainer.innerHTML = '';
+            document.getElementById('memory-moves').textContent = `Moves: ${memoryGame.moves}`;
+            
+            memoryGame.tiles.forEach(tile => {
+                const tileEl = document.createElement('div');
+                tileEl.className = `memory-tile ${tile.isFlipped ? 'flipped' : ''} ${tile.isMatched ? 'matched' : ''}`;
+                tileEl.style.cursor = memoryGame.gameActive && !tile.isFlipped ? 'pointer' : 'default';
+
+                tileEl.innerHTML = `<div class="memory-tile-inner">${tile.symbol}</div>`;
+                
+                // Show question mark face when not flipped/matched
+                if (!tile.isFlipped && !tile.isMatched) {
+                    tileEl.innerHTML = `<div class="memory-tile-inner transform-none">❓</div>`;
+                }
+
+
+                tileEl.onclick = () => handleTileClick(tile.id);
+                boardContainer.appendChild(tileEl);
+            });
+        }
+
+        function handleTileClick(id) {
+            if (!memoryGame.gameActive) {
+                document.getElementById('game-message').textContent = "Click 'Start New Game' to play!";
+                return;
+            }
+
+            const tileIndex = memoryGame.tiles.findIndex(t => t.id === id);
+            const tile = memoryGame.tiles[tileIndex];
+
+            // Ignore if already flipped, matched, or if two are already flipped
+            if (tile.isFlipped || tile.isMatched || memoryGame.flipped.length === 2) {
+                return;
+            }
+
+            tile.isFlipped = true;
+            memoryGame.flipped.push(tile);
+            renderMemoryBoard();
+
+            if (memoryGame.flipped.length === 2) {
+                memoryGame.moves++;
+                const [tile1, tile2] = memoryGame.flipped;
+
+                if (tile1.symbol === tile2.symbol) {
+                    // Match found
+                    tile1.isMatched = true;
+                    tile2.isMatched = true;
+                    memoryGame.matched.push(tile1, tile2);
+                    memoryGame.flipped = [];
+                    
+                    // Check for win
+                    if (memoryGame.matched.length === memoryGame.tiles.length) {
+                        endMemoryGame();
+                    }
+                    renderMemoryBoard();
+
+                } else {
+                    // No match, flip back after a delay
+                    setTimeout(() => {
+                        tile1.isFlipped = false;
+                        tile2.isFlipped = false;
+                        memoryGame.flipped = [];
+                        renderMemoryBoard();
+                    }, 800);
+                }
+            }
+        }
+
+        function endMemoryGame() {
+            memoryGame.gameActive = false;
+            document.getElementById('game-message').textContent = `🎉 You Win in ${memoryGame.moves} Moves!`;
+            
+            if (currentUser && !currentUser.isAnonymous) {
+                checkAndSaveHighScore(memoryGame.moves);
+            } else {
+                showModal("Game Finished", `You completed the game in ${memoryGame.moves} moves. Log in to save your high score!`);
+            }
+        }
+
+        async function listenForHighScore() {
+            const path = getCollectionPath(MEMORY_SCORE_COLLECTION, false, userId);
+            if (!path) {
+                 document.getElementById('memory-score').textContent = `High Score: Log in!`;
+                 return;
+            }
+            
+            // Query for high score document (there should be only one per user)
+            const q = query(collection(db, path), where("userId", "==", userId));
+            
+            const snapshot = await getDocs(q);
+            if (!snapshot.empty) {
+                const docSnap = snapshot.docs[0];
+                memoryGame.highScore = docSnap.data().highScore;
+                memoryGame.highScoreDocId = docSnap.id;
+            } else {
+                 memoryGame.highScore = null;
+                 memoryGame.highScoreDocId = null;
+            }
+            document.getElementById('memory-score').textContent = `High Score: ${memoryGame.highScore !== null ? memoryGame.highScore + ' Moves' : 'N/A'}`;
+        }
+
+        async function checkAndSaveHighScore(moves) {
+            const path = getCollectionPath(MEMORY_SCORE_COLLECTION, false, userId);
+            if (!path) return;
+
+            const currentScore = memoryGame.highScore;
+            
+            // Score comparison logic: Lower moves is a better score
+            const isNewHighScore = currentScore === null || moves < currentScore;
+
+            if (isNewHighScore) {
+                const scoreData = {
+                    userId: userId,
+                    highScore: moves,
+                    lastUpdated: new Date().toISOString()
+                };
+
+                try {
+                    if (memoryGame.highScoreDocId) {
+                        // Update existing document
+                        const docRef = doc(db, path, memoryGame.highScoreDocId);
+                        await updateDoc(docRef, scoreData);
+                    } else {
+                        // Create new document (since we only query for one, we assume we just add it to the collection)
+                        const newDocRef = await addDoc(collection(db, path), scoreData);
+                        memoryGame.highScoreDocId = newDocRef.id;
+                    }
+
+                    memoryGame.highScore = moves;
+                    document.getElementById('memory-score').textContent = `High Score: ${moves} Moves`;
+                    document.getElementById('game-message').textContent = `⭐ New High Score: ${moves} Moves! ⭐`;
+                } catch (error) {
+                    showModal("Score Save Failed", "Could not save high score to Firebase.");
+                    console.error("Error saving score:", error);
+                }
+            } else {
+                 document.getElementById('game-message').textContent = `Completed in ${moves} moves. Best is still ${currentScore} moves.`;
+            }
+        }
+
+        // --- APPLICATION STARTUP ---
+
+        window.onload = () => {
+            initializeAuth(); // Starts auth process and navigation listener
+            handleNavigation(); // Initial page load
+        };
+
+    </script>
+</body>
+</html>
+
