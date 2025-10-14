@@ -110,6 +110,7 @@
         <div class="bg-white p-6 rounded-xl shadow-2xl max-w-sm w-full">
             <h3 id="modal-title" class="text-xl font-bold mb-3 text-gray-800"></h3>
             <p id="modal-body" class="text-gray-600 mb-6"></p>
+            <!-- FIX: The hideModal() function is now ensured to be global and correctly toggling the 'hidden' class. -->
             <button onclick="hideModal()" class="w-full bg-blue-600 text-white font-semibold py-2 rounded-lg hover:bg-blue-700 transition">Close</button>
         </div>
     </div>
@@ -120,11 +121,10 @@
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, query, addDoc, updateDoc, deleteDoc, where, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
+        // import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         // setLogLevel('Debug'); // Uncomment for Firestore debug logs
 
-        // --- HARDCODED FIREBASE CONFIG (NO GLOBAL CANVAS VARS) ---
+        // --- HARDCODED FIREBASE CONFIG ---
         const FIREBASE_CONFIG = {
             apiKey: "AIzaSyC85wey_dOt8uiOyjxOdzwmdLPxK0qlav4",
             authDomain: "multigame-a032d.firebaseapp.com",
@@ -142,8 +142,9 @@
 
         // --- APPLICATION STATE ---
         let currentUser = null;
-        let userId = 'anonymous'; // Default state before auth resolves
-        const UNSUBSCRIBE_HANDLERS = {}; // Global object to hold and manage Firestore unsubs
+        let userId = null; // Set to null until authentication is ready
+        let isAuthReady = false; // NEW FLAG for authentication status
+        const UNSUBSCRIBE_HANDLERS = {}; 
 
         // --- UTILITY FUNCTIONS ---
 
@@ -155,7 +156,7 @@
         }
 
         /** Hides the custom modal */
-        function hideModal() {
+        window.hideModal = function() { // Ensure it's globally accessible for onclick
             document.getElementById('message-modal').classList.add('hidden');
         }
 
@@ -169,18 +170,17 @@
             });
         }
 
-        /** Helper for creating Firestore paths (simplified for GitHub/Vercel deployment) */
+        /** Helper for creating Firestore paths */
         const getCollectionPath = (collectionName, isPublic = true, specificUserId = null) => {
-            if (isPublic) {
-                // Public collections are top-level
-                return collectionName;
-            }
-            // Private path: users/{userId}/{collectionName}
-            const currentUserId = specificUserId || userId;
-            if (currentUserId === 'anonymous') {
-                showModal("Authentication Required", "You must be logged in to access private data features like high scores or persistent state.");
+            if (!userId) {
+                // Should not happen if isAuthReady is true, but as a safeguard
+                showModal("Service Not Ready", "Authentication is still initializing. Please wait a moment.");
                 return null;
             }
+            if (isPublic) {
+                return collectionName;
+            }
+            const currentUserId = specificUserId || userId;
             return `users/${currentUserId}/${collectionName}`;
         };
 
@@ -219,29 +219,52 @@
                     container.append(userElement, logoutButton);
                 }
 
-            } else {
-                // Logged out/Anonymous state (should rarely happen after initial anonymous sign-in)
-                const loginButton = document.createElement('button');
-                loginButton.className = 'bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-lg transition text-sm shadow';
-                loginButton.textContent = 'Login / Signup';
-                loginButton.onclick = () => navigate('auth');
-                container.appendChild(loginButton);
+            } else if (userId) {
+                 // Fallback if anonymous sign-in failed, but we have a temp ID
+                 const userElement = document.createElement('span');
+                 userElement.className = 'text-sm font-medium text-gray-700';
+                 userElement.textContent = 'Error State Guest';
+                 const loginButton = document.createElement('button');
+                 loginButton.className = 'bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-lg transition text-sm shadow';
+                 loginButton.textContent = 'Login / Signup';
+                 loginButton.onclick = () => navigate('auth');
+                 container.appendChild(loginButton);
             }
         }
 
-        /** Initializes Firebase Authentication and listens for state changes. */
+        /** FIX: Initializes Firebase Authentication, waiting for a persistent session first. */
         async function initializeAuth() {
-            // Sign in anonymously immediately to get a UID for non-auth Firestore operations
-            await signInAnonymously(auth).catch(e => console.error("Anonymous sign-in failed:", e));
+            // Use onAuthStateChanged as the single source of truth for the session state
+            onAuthStateChanged(auth, async (user) => {
+                let finalUser = user;
+                
+                // If no user (no persistent session found), force anonymous sign-in
+                if (!finalUser) {
+                    try {
+                        const anonUserCred = await signInAnonymously(auth);
+                        finalUser = anonUserCred.user;
+                    } catch (e) {
+                        console.error("Anonymous sign-in failed:", e);
+                        // If anonymous sign-in fails, we use a temporary client-side ID
+                        userId = 'temp-' + (Math.random().toString(36).substring(2, 9)); 
+                        currentUser = null;
+                        isAuthReady = true;
+                        renderAuthInfo();
+                        handleNavigation();
+                        return;
+                    }
+                }
+                
+                // Set final state and mark as ready
+                currentUser = finalUser;
+                userId = finalUser.uid;
+                isAuthReady = true;
 
-            onAuthStateChanged(auth, (user) => {
-                currentUser = user;
-                // Use UID if logged in, otherwise use a temporary random ID for guests (though anonymous sign-in is preferred)
-                userId = user ? user.uid : 'temp-' + (Math.random().toString(36).substring(2, 9)); 
                 renderAuthInfo();
-                handleNavigation(); // Rerender current view based on new auth state
+                handleNavigation(); 
             });
         }
+
 
         // --- ROUTING AND NAVIGATION ---
 
@@ -260,7 +283,7 @@
 
             const hash = window.location.hash.substring(1) || '/home';
             const [path, queryString] = hash.split('?');
-            const [gameName, gameId] = path.substring(1).split('/');
+            const [gameName] = path.substring(1).split('/');
 
             const params = {};
             if (queryString) {
@@ -272,8 +295,8 @@
             const container = document.getElementById('app-container');
             container.innerHTML = '';
 
-            // Wait for user ID to be set by onAuthStateChanged before rendering games
-            if (!currentUser) {
+            // Wait for auth to be ready before rendering any game/view
+            if (!isAuthReady) {
                 container.innerHTML = '<div class="text-center p-8 text-gray-500">Initializing services...</div>';
                 return;
             }
@@ -321,11 +344,23 @@
         // --- DASHBOARD/HOME VIEW ---
 
         function renderDashboard(container) {
+            // Note: userId is guaranteed to be non-null and isAuthReady is true here.
+            
+            // Handle case where anonymous sign-in failed (very rare)
+            const isErrorState = !currentUser && userId.startsWith('temp-');
+
+            let warningMessage = '';
+            if (isErrorState) {
+                warningMessage = '<p class="text-red-500 font-bold mt-2">Authentication Error: Multiplayer and save features are unavailable.</p>';
+            } else if (currentUser && currentUser.isAnonymous) {
+                warningMessage = '<p class="text-yellow-700 font-bold mt-2">You are signed in as a Guest. Log in to save scores and play multiplayer.</p>';
+            }
+
             container.innerHTML = `
                 <div class="text-center mb-8">
                     <h2 class="text-4xl font-extrabold text-gray-900 mb-2">Welcome to the Game Hub</h2>
                     <p class="text-gray-600">Choose a game below to get started. Your User ID: <span class="font-mono text-xs">${userId}</span></p>
-                    ${currentUser.isAnonymous ? '<p class="text-red-500 font-bold mt-2">You are signed in as a Guest. Log in to save scores and play multiplayer.</p>' : ''}
+                    ${warningMessage}
                 </div>
                 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
                     <!-- Game 1: Tic-Tac-Toe -->
@@ -366,7 +401,7 @@
             `;
         }
 
-        // --- AUTH FORM VIEW (No changes needed) ---
+        // --- AUTH FORM VIEW (Relying on the fixed initializeAuth for persistence) ---
 
         function renderAuthForm(container) {
             if (currentUser && !currentUser.isAnonymous) {
@@ -714,7 +749,7 @@
             highScore: null,
             highScoreDocId: null,
         };
-        let isSavingScore = false; // Flag to prevent multiple saves
+        let isSavingScore = false; 
 
         function setupMemoryGame() {
             const symbols = ['🍎', '🍌', '🥝', '🍉', '🍍', '🥭', '🍇', '🍓'];
@@ -733,7 +768,9 @@
         }
 
         function renderMemoryGame(container) {
-             if (currentUser.isAnonymous) {
+            const isGuest = currentUser && currentUser.isAnonymous;
+
+             if (isGuest) {
                 container.innerHTML = `<div class="text-center p-8 bg-yellow-100 rounded-xl shadow-lg border-yellow-300 border-l-4">
                         <h3 class="text-xl font-bold text-yellow-800 mb-4">Login for Persistent Scores</h3>
                         <p class="text-gray-600 mb-4">You can play, but your high score will not be saved unless you <a href="#/auth" class="text-blue-600 font-semibold hover:underline">log in or sign up</a>.</p>
@@ -780,7 +817,8 @@
             
             const scoreEl = document.getElementById('memory-score');
             if (scoreEl) {
-                scoreEl.textContent = `High Score: ${memoryGame.highScore !== null ? memoryGame.highScore + ' Moves' : (currentUser.isAnonymous ? 'N/A (Guest)' : 'N/A')}`;
+                const isGuest = currentUser && currentUser.isAnonymous;
+                scoreEl.textContent = `High Score: ${memoryGame.highScore !== null ? memoryGame.highScore + ' Moves' : (isGuest ? 'N/A (Guest)' : 'N/A')}`;
             }
 
             if (memoryGame.tiles.length === 0) {
@@ -851,7 +889,9 @@
             memoryGame.gameActive = false;
             document.getElementById('game-message').textContent = `🎉 You Win in ${memoryGame.moves} Moves!`;
             
-            if (currentUser && !currentUser.isAnonymous) {
+            const isGuest = currentUser && currentUser.isAnonymous;
+
+            if (currentUser && !isGuest) {
                 checkAndSaveHighScore(memoryGame.moves);
             } else {
                 showModal("Game Finished", `You completed the game in ${memoryGame.moves} moves. Log in to save your high score!`);
@@ -859,12 +899,12 @@
         }
 
         async function listenForHighScore() {
-            if (currentUser.isAnonymous) return;
+            const isGuest = currentUser && currentUser.isAnonymous;
+            if (isGuest) return;
             const path = getCollectionPath(MEMORY_SCORE_COLLECTION, false);
             if (!path) return;
 
-            // Use onSnapshot for a simple query to fetch the single score document
-            const q = query(collection(db, path)); // Query entire private collection
+            const q = query(collection(db, path)); 
             
             UNSUBSCRIBE_HANDLERS['memory-score'] = onSnapshot(q, (snapshot) => {
                  if (!snapshot.empty) {
@@ -957,7 +997,9 @@
         }
 
         function renderGoldMiner(container) {
-             if (currentUser.isAnonymous) {
+            const isGuest = currentUser && currentUser.isAnonymous;
+
+             if (isGuest) {
                 container.innerHTML = `<div class="text-center p-8 bg-yellow-100 rounded-xl shadow-lg border-yellow-300 border-l-4">
                         <h3 class="text-xl font-bold text-yellow-800 mb-4">Login for Persistent Save</h3>
                         <p class="text-gray-600 mb-4">You can play, but your progress will not be saved unless you <a href="#/auth" class="text-blue-600 font-semibold hover:underline">log in or sign up</a>.</p>
@@ -1006,15 +1048,18 @@
             const now = Date.now();
             const elapsedSeconds = (now - lastUpdateTime) / 1000;
             lastUpdateTime = now;
+            
+            const isGuest = currentUser && currentUser.isAnonymous;
 
-            if (minerState.goldPerSecond > 0) {
-                const goldIncrease = minerState.goldPerSecond * elapsedSeconds;
+            if (calculateGPS() > 0) {
+                const goldIncrease = calculateGPS() * elapsedSeconds;
                 minerState.gold += goldIncrease;
-                renderMinerUI();
             }
             
-            // Save state every 5 seconds (or more frequently if desired)
-            if (now - lastSaveTime > 5000 && !currentUser.isAnonymous) {
+            renderMinerUI();
+            
+            // Save state every 5 seconds (only for non-anonymous users)
+            if (now - lastSaveTime > 5000 && !isGuest) {
                 saveMinerData();
                 lastSaveTime = now;
             }
@@ -1058,23 +1103,18 @@
         function mineGold() {
             minerState.gold += minerState.clickPower;
             renderMinerUI();
-            // Immediate save on click if anonymous, otherwise rely on loop save
-            if (currentUser.isAnonymous) {
-                 // Nothing to save anonymously, just update UI
-            } else {
-                 // Save for persistent anonymous state if needed, but we rely on login for persistence
-            }
         }
 
         function buyUpgrade(type) {
             const currentLevel = minerState.upgrades[type];
             const cost = UPGRADE_COSTS[type](currentLevel);
+            const isGuest = currentUser && currentUser.isAnonymous;
             
             if (minerState.gold >= cost) {
                 minerState.gold -= cost;
                 minerState.upgrades[type]++;
                 renderMinerUI();
-                if (!currentUser.isAnonymous) {
+                if (!isGuest) {
                      saveMinerData(); // Immediate save on purchase
                 }
             } else {
@@ -1083,7 +1123,8 @@
         }
 
         async function listenForMinerData() {
-            if (currentUser.isAnonymous) {
+            const isGuest = currentUser && currentUser.isAnonymous;
+            if (isGuest) {
                 minerState = { ...minerState, gold: 0, clickPower: 1, goldPerSecond: 0, upgrades: { pickaxe: 0, worker: 0 } };
                 renderMinerUI();
                 return;
@@ -1107,8 +1148,9 @@
                     // Compensate for offline time
                     if (data.lastUpdated) {
                         const timeOffline = (Date.now() - new Date(data.lastUpdated).getTime()) / 1000;
-                        if (timeOffline > 0 && minerState.goldPerSecond > 0) {
-                             const idleGold = timeOffline * calculateGPS();
+                        const gps = calculateGPS(); // Calculate GPS based on loaded upgrades
+                        if (timeOffline > 0 && gps > 0) {
+                             const idleGold = timeOffline * gps;
                              minerState.gold += idleGold;
                              showModal("Welcome Back, Miner!", `You earned ${Math.floor(idleGold).toLocaleString()} gold while you were away!`);
                         }
@@ -1122,7 +1164,8 @@
         }
 
         async function saveMinerData() {
-            if (currentUser.isAnonymous) return;
+            const isGuest = currentUser && currentUser.isAnonymous;
+            if (isGuest) return;
             const path = getCollectionPath(MINER_COLLECTION, false);
             if (!path) return;
 
@@ -1363,7 +1406,7 @@
                 } else if (game.status === 'playing') {
                     if (playerCommit) {
                         statusEl.textContent = 'Choice committed. Waiting for opponent...';
-                        actionArea.innerHTML = `<button onclick="revealRPSChoice('${gameId}', '${playerChoice}', '${playerCommit}', ${isP1})" class="w-full bg-orange-500 text-white font-semibold py-3 rounded-lg hover:bg-orange-600 transition shadow-md">
+                        actionArea.innerHTML = `<button onclick="revealRPSChoice('${gameId}', ${isP1})" class="w-full bg-orange-500 text-white font-semibold py-3 rounded-lg hover:bg-orange-600 transition shadow-md" ${opponentCommit ? '' : 'disabled'}>
                             ${opponentCommit ? 'Click to REVEAL (Opponent ready!)' : 'Waiting for opponent to commit...'}
                         </button>`;
                     } else {
@@ -1373,9 +1416,10 @@
                 } else if (game.status === 'reveal') {
                     if (playerChoice) {
                         statusEl.textContent = `Waiting for opponent to reveal...`;
+                        actionArea.innerHTML = '';
                     } else {
                         statusEl.textContent = 'REVEAL your choice!';
-                        actionArea.innerHTML = `<button onclick="revealRPSChoice('${gameId}', '${playerChoice}', '${playerCommit}', ${isP1})" class="w-full bg-orange-500 text-white font-semibold py-3 rounded-lg hover:bg-orange-600 transition shadow-md">
+                        actionArea.innerHTML = `<button onclick="revealRPSChoice('${gameId}', ${isP1})" class="w-full bg-orange-500 text-white font-semibold py-3 rounded-lg hover:bg-orange-600 transition shadow-md">
                             Click to REVEAL
                         </button>`;
                     }
@@ -1414,21 +1458,19 @@
             if (!path) return;
             const gameRef = doc(db, path, gameId);
             
-            // Generate a random salt for better security
             const salt = Math.random().toString(36).substring(2, 15);
             const commitHash = await sha256(choice + salt);
             
             const fieldCommit = isP1 ? 'player1Commit' : 'player2Commit';
-            const fieldChoice = isP1 ? 'player1Choice' : 'player2Choice';
             
             try {
-                // We save the unhashed choice locally for the user to reveal later
-                localStorage.setItem(`rps_choice_${gameId}`, choice);
-                localStorage.setItem(`rps_salt_${gameId}`, salt);
+                // Save the unhashed choice and salt securely in local storage
+                localStorage.setItem(`rps_choice_${gameId}_${userId}`, choice);
+                localStorage.setItem(`rps_salt_${gameId}_${userId}`, salt);
 
                 await updateDoc(gameRef, {
                     [fieldCommit]: commitHash,
-                    [fieldChoice]: null, // Clear previous choice if restarting round
+                    [isP1 ? 'player1Choice' : 'player2Choice']: null, // Clear previous choice
                 });
             } catch(e) {
                 showModal("Commit Failed", "Could not commit choice. Try again.");
@@ -1436,34 +1478,30 @@
             }
         }
         
-        async function revealRPSChoice(gameId, choice, commit, isP1) {
+        async function revealRPSChoice(gameId, isP1) {
             const path = getCollectionPath(RPS_COLLECTION, true);
             if (!path) return;
             const gameRef = doc(db, path, gameId);
             
-            // Retrieve the stored choice and salt
-            const storedChoice = localStorage.getItem(`rps_choice_${gameId}`);
-            const storedSalt = localStorage.getItem(`rps_salt_${gameId}`);
+            // Retrieve the stored choice
+            const storedChoice = localStorage.getItem(`rps_choice_${gameId}_${userId}`);
 
-            if (!storedChoice || !storedSalt) {
-                showModal("Error", "Could not find your committed choice. You may need to start a new round.");
+            if (!storedChoice) {
+                showModal("Error", "Could not find your committed choice. You may need to commit again.");
                 return;
             }
 
             const fieldChoice = isP1 ? 'player1Choice' : 'player2Choice';
-            const fieldCommit = isP1 ? 'player1Commit' : 'player2Commit';
-            const fieldOpponentChoice = isP1 ? 'player2Choice' : 'player1Choice';
             
-            // Update the game document with the revealed choice and change status if opponent is ready
             const updateData = {
                 [fieldChoice]: storedChoice,
-                status: 'reveal' // Set to reveal state
+                status: 'reveal'
             };
             
             try {
                 await updateDoc(gameRef, updateData);
                 
-                // After reveal, check if opponent has also revealed
+                // After reveal, check if opponent has also revealed to determine winner
                 const currentGameState = (await getDoc(gameRef)).data();
                 
                 if (currentGameState.player1Choice && currentGameState.player2Choice) {
@@ -1510,8 +1548,9 @@
                     winner: null,
                     round: (await getDoc(gameRef)).data().round + 1,
                 });
-                localStorage.removeItem(`rps_choice_${gameId}`);
-                localStorage.removeItem(`rps_salt_${gameId}`);
+                // Clear local storage for this game and user
+                localStorage.removeItem(`rps_choice_${gameId}_${userId}`);
+                localStorage.removeItem(`rps_salt_${gameId}_${userId}`);
             } catch(e) {
                 showModal("Reset Failed", "Could not reset game. Try refreshing.");
                 console.error("RPS Reset Error:", e);
