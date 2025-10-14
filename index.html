@@ -110,7 +110,6 @@
         <div class="bg-white p-6 rounded-xl shadow-2xl max-w-sm w-full">
             <h3 id="modal-title" class="text-xl font-bold mb-3 text-gray-800"></h3>
             <p id="modal-body" class="text-gray-600 mb-6"></p>
-            <!-- FIX: The hideModal() function is now ensured to be global and correctly toggling the 'hidden' class. -->
             <button onclick="hideModal()" class="w-full bg-blue-600 text-white font-semibold py-2 rounded-lg hover:bg-blue-700 transition">Close</button>
         </div>
     </div>
@@ -125,6 +124,7 @@
         // setLogLevel('Debug'); // Uncomment for Firestore debug logs
 
         // --- HARDCODED FIREBASE CONFIG ---
+        // NOTE: The user is expected to replace this with their own Vercel/GitHub Pages Firebase project config.
         const FIREBASE_CONFIG = {
             apiKey: "AIzaSyC85wey_dOt8uiOyjxOdzwmdLPxK0qlav4",
             authDomain: "multigame-a032d.firebaseapp.com",
@@ -142,8 +142,8 @@
 
         // --- APPLICATION STATE ---
         let currentUser = null;
-        let userId = null; // Set to null until authentication is ready
-        let isAuthReady = false; // NEW FLAG for authentication status
+        let userId = null; 
+        let isAuthReady = false; 
         const UNSUBSCRIBE_HANDLERS = {}; 
 
         // --- UTILITY FUNCTIONS ---
@@ -156,7 +156,7 @@
         }
 
         /** Hides the custom modal */
-        window.hideModal = function() { // Ensure it's globally accessible for onclick
+        window.hideModal = function() { 
             document.getElementById('message-modal').classList.add('hidden');
         }
 
@@ -170,15 +170,14 @@
             });
         }
 
-        /** Helper for creating Firestore paths */
+        /** Helper for creating Firestore paths (simplified for external environments) */
         const getCollectionPath = (collectionName, isPublic = true, specificUserId = null) => {
             if (!userId) {
-                // Should not happen if isAuthReady is true, but as a safeguard
                 showModal("Service Not Ready", "Authentication is still initializing. Please wait a moment.");
                 return null;
             }
             if (isPublic) {
-                return collectionName;
+                return collectionName; // Returns just 'tictactoe_games' for root-level access
             }
             const currentUserId = specificUserId || userId;
             return `users/${currentUserId}/${collectionName}`;
@@ -557,6 +556,7 @@
                         gameElement.className = 'flex justify-between items-center bg-gray-50 p-3 rounded-lg border';
                         gameElement.innerHTML = `
                             <span class="font-medium text-gray-700">Host: ${game.playerNames['X']}</span>
+                            <!-- IMPORTANT: Ensure the onclick call works and passes doc.id -->
                             <button onclick="joinTicTacToeGame('${doc.id}')" class="bg-blue-500 text-white text-sm font-semibold py-1 px-3 rounded-md hover:bg-blue-600 transition">
                                 Join (as O)
                             </button>
@@ -571,6 +571,7 @@
             });
         }
 
+        // FIX: Added robust error handling to surface issues that cause silent failure.
         async function joinTicTacToeGame(gameId) {
             const path = getCollectionPath(TTTOE_COLLECTION, true);
             if (!path) return;
@@ -586,8 +587,9 @@
                 });
                 navigate('tictactoe', { id: gameId });
             } catch (error) {
-                showModal("Joining Failed", "Could not join this game. It might have just filled up.");
-                console.error("Error joining game:", error);
+                const errorMsg = error.message || error.toString();
+                showModal("Joining Failed", `Could not join this Tic-Tac-Toe game. Error: ${errorMsg}. Check console for details.`);
+                console.error("Error joining TicTacToe game:", error);
             }
         }
 
@@ -1289,6 +1291,7 @@
                         gameElement.className = 'flex justify-between items-center bg-gray-50 p-3 rounded-lg border';
                         gameElement.innerHTML = `
                             <span class="font-medium text-gray-700">Host: ${game.player1Name}</span>
+                            <!-- IMPORTANT: Ensure the onclick call works and passes doc.id -->
                             <button onclick="joinRPSGame('${doc.id}')" class="bg-blue-500 text-white text-sm font-semibold py-1 px-3 rounded-md hover:bg-blue-600 transition">
                                 Join
                             </button>
@@ -1303,6 +1306,7 @@
             });
         }
 
+        // FIX: Added robust error handling to surface issues that cause silent failure.
         async function joinRPSGame(gameId) {
             const path = getCollectionPath(RPS_COLLECTION, true);
             if (!path) return;
@@ -1318,8 +1322,9 @@
                 });
                 navigate('rps', { id: gameId });
             } catch (error) {
-                showModal("Joining Failed", "Could not join this game. It might have just filled up.");
-                console.error("Error joining game:", error);
+                const errorMsg = error.message || error.toString();
+                showModal("Joining Failed", `Could not join this RPS game. Error: ${errorMsg}. Check console for details.`);
+                console.error("Error joining RPS game:", error);
             }
         }
 
