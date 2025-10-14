@@ -21,6 +21,7 @@
             transform: translateY(-4px) scale(1.02);
             box-shadow: 0 10px 20px rgba(0,0,0,0.1);
         }
+        /* Tic-Tac-Toe Styles */
         .tttoe-cell {
             width: 80px;
             height: 80px;
@@ -63,6 +64,32 @@
         .memory-tile-inner {
             transform: rotateY(180deg); /* Text is visible only when flipped */
         }
+        /* Gold Miner Styles */
+        #miner-btn {
+            background: linear-gradient(145deg, #FFC107, #FF9800);
+            box-shadow: 0 6px #E65100;
+            transition: all 0.1s;
+        }
+        #miner-btn:active {
+            box-shadow: 0 2px #E65100;
+            transform: translateY(4px);
+        }
+        /* RPS Styles */
+        .rps-choice {
+            padding: 1rem;
+            border-radius: 12px;
+            border: 3px solid transparent;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .rps-choice:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        .rps-choice.selected {
+            border-color: #3b82f6;
+            background-color: #eff6ff;
+        }
     </style>
 </head>
 <body class="min-h-screen p-4 md:p-8">
@@ -76,7 +103,7 @@
         </div>
     </header>
 
-    <main id="app-container" class="max-w-4xl mx-auto"></main>
+    <main id="app-container" class="max-w-6xl mx-auto"></main>
 
     <!-- Modal for general messages/errors -->
     <div id="message-modal" class="fixed inset-0 bg-gray-900 bg-opacity-75 hidden flex items-center justify-center p-4 z-50">
@@ -91,16 +118,14 @@
     <script type="module">
         // --- FIREBASE IMPORTS ---
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, query, addDoc, updateDoc, deleteDoc, where, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // setLogLevel('Debug'); // Uncomment for Firestore debug logs
 
-        // --- GLOBAL VARIABLES (Canvas Mandate & User Config Structure) ---
-        // These variables are provided by the Canvas environment for authentication and app context.
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+        // --- HARDCODED FIREBASE CONFIG (NO GLOBAL CANVAS VARS) ---
+        const FIREBASE_CONFIG = {
             apiKey: "AIzaSyC85wey_dOt8uiOyjxOdzwmdLPxK0qlav4",
             authDomain: "multigame-a032d.firebaseapp.com",
             projectId: "multigame-a032d",
@@ -109,16 +134,16 @@
             appId: "1:51842272357:web:c8951b57e3a729f8db4a8c",
             measurementId: "G-GJPMKV1XX0"
         };
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-
+        
         // --- FIREBASE INITIALIZATION ---
-        const app = initializeApp(firebaseConfig);
+        const app = initializeApp(FIREBASE_CONFIG);
         const db = getFirestore(app);
         const auth = getAuth(app);
 
         // --- APPLICATION STATE ---
         let currentUser = null;
         let userId = 'anonymous'; // Default state before auth resolves
+        const UNSUBSCRIBE_HANDLERS = {}; // Global object to hold and manage Firestore unsubs
 
         // --- UTILITY FUNCTIONS ---
 
@@ -134,18 +159,29 @@
             document.getElementById('message-modal').classList.add('hidden');
         }
 
-        /** Helper for creating Firestore paths */
+        /** Cleans up all active Firestore listeners before navigation. */
+        function cleanupListeners() {
+            Object.keys(UNSUBSCRIBE_HANDLERS).forEach(key => {
+                if (typeof UNSUBSCRIBE_HANDLERS[key] === 'function') {
+                    UNSUBSCRIBE_HANDLERS[key]();
+                }
+                delete UNSUBSCRIBE_HANDLERS[key];
+            });
+        }
+
+        /** Helper for creating Firestore paths (simplified for GitHub/Vercel deployment) */
         const getCollectionPath = (collectionName, isPublic = true, specificUserId = null) => {
             if (isPublic) {
-                return `artifacts/${appId}/public/data/${collectionName}`;
+                // Public collections are top-level
+                return collectionName;
             }
-            // Private path logic
+            // Private path: users/{userId}/{collectionName}
             const currentUserId = specificUserId || userId;
             if (currentUserId === 'anonymous') {
-                showModal("Authentication Error", "Cannot access private data anonymously. Please sign up or log in.");
+                showModal("Authentication Required", "You must be logged in to access private data features like high scores or persistent state.");
                 return null;
             }
-            return `artifacts/${appId}/users/${currentUserId}/${collectionName}`;
+            return `users/${currentUserId}/${collectionName}`;
         };
 
         // --- AUTHENTICATION LOGIC ---
@@ -156,11 +192,12 @@
             container.innerHTML = '';
             
             if (currentUser) {
-                // Logged in/Authenticated state
-                const emailDisplay = currentUser.email ? currentUser.email : `User ID: ${currentUser.uid.substring(0, 8)}...`;
+                const isAnon = currentUser.isAnonymous;
+                const emailDisplay = isAnon ? 'Guest User' : (currentUser.email || `User ID: ${currentUser.uid.substring(0, 8)}...`);
+                
                 const userElement = document.createElement('span');
                 userElement.className = 'text-sm font-medium text-gray-700 truncate max-w-[100px] md:max-w-none';
-                userElement.textContent = currentUser.email ? emailDisplay : 'Guest User';
+                userElement.textContent = isAnon ? 'Guest' : emailDisplay;
                 userElement.title = `Full User ID: ${currentUser.uid}`;
 
                 const logoutButton = document.createElement('button');
@@ -171,10 +208,19 @@
                     navigate('home');
                 };
 
-                container.append(userElement, logoutButton);
+                const loginButton = document.createElement('button');
+                loginButton.className = 'bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-lg transition text-sm shadow';
+                loginButton.textContent = isAnon ? 'Login / Signup' : 'Account';
+                loginButton.onclick = () => navigate('auth');
+                
+                if (isAnon) {
+                    container.append(userElement, loginButton);
+                } else {
+                    container.append(userElement, logoutButton);
+                }
 
             } else {
-                // Logged out/Anonymous state
+                // Logged out/Anonymous state (should rarely happen after initial anonymous sign-in)
                 const loginButton = document.createElement('button');
                 loginButton.className = 'bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-lg transition text-sm shadow';
                 loginButton.textContent = 'Login / Signup';
@@ -185,20 +231,13 @@
 
         /** Initializes Firebase Authentication and listens for state changes. */
         async function initializeAuth() {
-            if (initialAuthToken) {
-                try {
-                    await signInWithCustomToken(auth, initialAuthToken);
-                } catch (error) {
-                    console.error("Custom token sign-in failed, falling back to anonymous.", error);
-                    await signInAnonymously(auth);
-                }
-            } else {
-                await signInAnonymously(auth);
-            }
+            // Sign in anonymously immediately to get a UID for non-auth Firestore operations
+            await signInAnonymously(auth).catch(e => console.error("Anonymous sign-in failed:", e));
 
             onAuthStateChanged(auth, (user) => {
                 currentUser = user;
-                userId = user ? user.uid : 'anonymous';
+                // Use UID if logged in, otherwise use a temporary random ID for guests (though anonymous sign-in is preferred)
+                userId = user ? user.uid : 'temp-' + (Math.random().toString(36).substring(2, 9)); 
                 renderAuthInfo();
                 handleNavigation(); // Rerender current view based on new auth state
             });
@@ -209,16 +248,16 @@
         /** Navigates the application via hash change. */
         window.navigate = (path, params = {}) => {
             let hash = `#/${path}`;
-            if (path === 'tictactoe' && params.id) {
+            if (params.id) {
                 hash += `?id=${params.id}`;
-            } else if (path === 'tictactoe-lobby') {
-                // No change needed
             }
             window.location.hash = hash;
         };
 
         /** Handles hash change events to load the correct component. */
         function handleNavigation() {
+            cleanupListeners(); // IMPORTANT: Clear listeners before navigating away
+
             const hash = window.location.hash.substring(1) || '/home';
             const [path, queryString] = hash.split('?');
             const [gameName, gameId] = path.substring(1).split('/');
@@ -232,6 +271,12 @@
 
             const container = document.getElementById('app-container');
             container.innerHTML = '';
+
+            // Wait for user ID to be set by onAuthStateChanged before rendering games
+            if (!currentUser) {
+                container.innerHTML = '<div class="text-center p-8 text-gray-500">Initializing services...</div>';
+                return;
+            }
 
             switch (gameName) {
                 case 'home':
@@ -253,6 +298,19 @@
                 case 'memory':
                     renderMemoryGame(container);
                     break;
+                case 'goldminer':
+                    renderGoldMiner(container);
+                    break;
+                case 'rps-lobby':
+                    renderRPSLobby(container);
+                    break;
+                case 'rps':
+                     if (params.id) {
+                        renderRPSGame(container, params.id);
+                    } else {
+                        navigate('rps-lobby');
+                    }
+                    break;
                 default:
                     renderDashboard(container);
             }
@@ -266,44 +324,53 @@
             container.innerHTML = `
                 <div class="text-center mb-8">
                     <h2 class="text-4xl font-extrabold text-gray-900 mb-2">Welcome to the Game Hub</h2>
-                    <p class="text-gray-600">Choose a game below to get started. ${currentUser ? 'Your User ID is: ' + userId : 'Please log in to save high scores and use multiplayer features.'}</p>
+                    <p class="text-gray-600">Choose a game below to get started. Your User ID: <span class="font-mono text-xs">${userId}</span></p>
+                    ${currentUser.isAnonymous ? '<p class="text-red-500 font-bold mt-2">You are signed in as a Guest. Log in to save scores and play multiplayer.</p>' : ''}
                 </div>
-                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-                    <!-- Tic-Tac-Toe Card -->
+                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                    <!-- Game 1: Tic-Tac-Toe -->
                     <div id="card-tictactoe" class="game-card bg-white p-6 rounded-xl shadow-lg border border-blue-100" onclick="navigate('tictactoe-lobby')">
                         <div class="text-5xl mb-4 text-blue-600">
                             <span class="inline-block transform rotate-6">✖️</span>
                             <span class="inline-block transform -rotate-6">⭕</span>
                         </div>
-                        <h3 class="text-2xl font-bold mb-2">Tic-Tac-Toe</h3>
-                        <p class="text-gray-500">Real-time multiplayer fun. Challenge a friend!</p>
-                        <span class="mt-4 inline-block text-sm font-semibold text-blue-500">Start Game →</span>
+                        <h3 class="text-xl font-bold mb-2">Tic-Tac-Toe (PVP)</h3>
+                        <p class="text-gray-500 text-sm">Real-time multiplayer challenge.</p>
+                        <span class="mt-4 inline-block text-sm font-semibold text-blue-500">Play →</span>
                     </div>
 
-                    <!-- Memory Match Card -->
+                    <!-- Game 2: Memory Match -->
                     <div id="card-memory" class="game-card bg-white p-6 rounded-xl shadow-lg border border-green-100" onclick="navigate('memory')">
                         <div class="text-5xl mb-4 text-green-600">🧠</div>
-                        <h3 class="text-2xl font-bold mb-2">Memory Match</h3>
-                        <p class="text-gray-500">Test your memory. High score saved (login required).</p>
-                        <span class="mt-4 inline-block text-sm font-semibold text-green-500">Play Solo →</span>
+                        <h3 class="text-xl font-bold mb-2">Memory Match (Solo)</h3>
+                        <p class="text-gray-500 text-sm">Test your memory. Saves lowest move count.</p>
+                        <span class="mt-4 inline-block text-sm font-semibold text-green-500">Play →</span>
                     </div>
 
-                    <!-- Placeholder/Future Game Card -->
-                    <div class="bg-white p-6 rounded-xl shadow-lg border border-gray-100 opacity-60">
-                        <div class="text-5xl mb-4 text-gray-400">❓</div>
-                        <h3 class="text-2xl font-bold mb-2">Future Game</h3>
-                        <p class="text-gray-500">Coming soon... Maybe an asteroid dodger?</p>
-                        <span class="mt-4 inline-block text-sm font-semibold text-gray-400">Unavailable</span>
+                    <!-- Game 3: Gold Miner (NEW) -->
+                    <div id="card-miner" class="game-card bg-white p-6 rounded-xl shadow-lg border border-amber-100" onclick="navigate('goldminer')">
+                        <div class="text-5xl mb-4 text-amber-600">⛏️</div>
+                        <h3 class="text-xl font-bold mb-2">Gold Miner (Clicker)</h3>
+                        <p class="text-gray-500 text-sm">Persistent idle/clicker game. Saves gold count.</p>
+                        <span class="mt-4 inline-block text-sm font-semibold text-amber-500">Play →</span>
+                    </div>
+                    
+                    <!-- Game 4: Rock, Paper, Scissors (NEW) -->
+                    <div id="card-rps" class="game-card bg-white p-6 rounded-xl shadow-lg border border-purple-100" onclick="navigate('rps-lobby')">
+                        <div class="text-5xl mb-4 text-purple-600">✂️🪨📄</div>
+                        <h3 class="text-xl font-bold mb-2">RPS (PVP)</h3>
+                        <p class="text-gray-500 text-sm">Real-time Rock-Paper-Scissors. Commit & Reveal.</p>
+                        <span class="mt-4 inline-block text-sm font-semibold text-purple-500">Play →</span>
                     </div>
                 </div>
             `;
         }
 
-        // --- AUTH FORM VIEW ---
+        // --- AUTH FORM VIEW (No changes needed) ---
 
         function renderAuthForm(container) {
             if (currentUser && !currentUser.isAnonymous) {
-                container.innerHTML = '<div class="text-center p-8">You are already logged in!</div>';
+                container.innerHTML = '<div class="text-center p-8 bg-green-100 rounded-xl">You are already logged in! Redirecting...</div>';
                 setTimeout(() => navigate('home'), 1500);
                 return;
             }
@@ -375,7 +442,7 @@
         const TTTOE_COLLECTION = 'tictactoe_games';
 
         function renderTicTacToeLobby(container) {
-            if (!currentUser || currentUser.isAnonymous) {
+            if (currentUser.isAnonymous) {
                 container.innerHTML = `
                     <div class="text-center p-8 bg-yellow-100 rounded-xl shadow-lg border-yellow-300 border-l-4">
                         <h3 class="text-xl font-bold text-yellow-800 mb-4">Multiplayer requires sign-in</h3>
@@ -409,8 +476,10 @@
         }
 
         async function createTicTacToeGame() {
-            const path = getCollectionPath(TTTOE_COLLECTION);
+            const path = getCollectionPath(TTTOE_COLLECTION, true);
             if (!path) return;
+
+            const playerName = currentUser.email || `User ${userId.substring(0, 4)}`;
 
             const newGame = {
                 board: Array(9).fill(null),
@@ -418,11 +487,10 @@
                 playerX: userId,
                 playerO: null,
                 currentTurn: 'X',
-                creatorEmail: currentUser.email || 'Guest',
+                creatorId: userId,
                 createdAt: new Date().toISOString(),
                 winner: null,
-                players: {}, // To store player data, e.g., { [userId]: { symbol: 'X' } }
-                playerNames: { 'X': currentUser.email || `User ${userId.substring(0, 4)}` }
+                playerNames: { 'X': playerName }
             };
 
             try {
@@ -435,22 +503,21 @@
         }
 
         function listenForOpenGames() {
-            const path = getCollectionPath(TTTOE_COLLECTION);
+            const path = getCollectionPath(TTTOE_COLLECTION, true);
             if (!path) return;
 
             const q = query(collection(db, path), where("status", "==", "waiting"));
             const listContainer = document.getElementById('open-games-list');
 
-            onSnapshot(q, (snapshot) => {
+            UNSUBSCRIBE_HANDLERS['tttoe-lobby'] = onSnapshot(q, (snapshot) => {
                 listContainer.innerHTML = '';
-                if (snapshot.empty) {
-                    listContainer.innerHTML = '<p class="text-gray-500 text-center p-4">No open games found. Be the first to create one!</p>';
-                    return;
-                }
+                let hasGames = false;
 
                 snapshot.forEach(doc => {
                     const game = doc.data();
-                    if (game.playerX !== userId) { // Only show games not created by the current user
+                    // Only show games not created by the current user
+                    if (game.playerX !== userId) { 
+                        hasGames = true;
                         const gameElement = document.createElement('div');
                         gameElement.className = 'flex justify-between items-center bg-gray-50 p-3 rounded-lg border';
                         gameElement.innerHTML = `
@@ -462,22 +529,25 @@
                         listContainer.appendChild(gameElement);
                     }
                 });
+                
+                if (!hasGames) {
+                    listContainer.innerHTML = '<p class="text-gray-500 text-center p-4">No open games found. Be the first to create one!</p>';
+                }
             });
         }
 
         async function joinTicTacToeGame(gameId) {
-            const path = getCollectionPath(TTTOE_COLLECTION);
+            const path = getCollectionPath(TTTOE_COLLECTION, true);
             if (!path) return;
 
             const gameRef = doc(db, path, gameId);
+            const playerName = currentUser.email || `User ${userId.substring(0, 4)}`;
+
             try {
                 await updateDoc(gameRef, {
                     playerO: userId,
                     status: 'playing',
-                    playerNames: {
-                        'X': (await getDoc(gameRef)).data().playerNames['X'],
-                        'O': currentUser.email || `User ${userId.substring(0, 4)}`
-                    }
+                    [`playerNames.O`]: playerName
                 });
                 navigate('tictactoe', { id: gameId });
             } catch (error) {
@@ -508,12 +578,8 @@
             listenForTicTacToeUpdates(gameId);
         }
 
-        let unsubscribeTicTacToe = null;
-
         function listenForTicTacToeUpdates(gameId) {
-            if (unsubscribeTicTacToe) unsubscribeTicTacToe(); // Cleanup previous listener
-
-            const path = getCollectionPath(TTTOE_COLLECTION);
+            const path = getCollectionPath(TTTOE_COLLECTION, true);
             if (!path) return;
 
             const gameRef = doc(db, path, gameId);
@@ -522,7 +588,7 @@
             const infoElement = document.getElementById('game-info');
             const deleteBtn = document.getElementById('delete-game-btn');
 
-            unsubscribeTicTacToe = onSnapshot(gameRef, (docSnap) => {
+            UNSUBSCRIBE_HANDLERS['tttoe-game'] = onSnapshot(gameRef, (docSnap) => {
                 if (!docSnap.exists()) {
                     showModal("Game Ended", "This game session was deleted by the host.");
                     navigate('tictactoe-lobby');
@@ -536,24 +602,31 @@
                 deleteBtn.classList.add('hidden');
                 if (game.playerX === userId && (game.status === 'win' || game.status === 'draw' || game.playerO === null)) {
                     deleteBtn.classList.remove('hidden');
-                    deleteBtn.onclick = () => deleteDoc(gameRef).catch(e => console.error("Error deleting:", e));
+                    deleteBtn.onclick = () => {
+                        deleteDoc(gameRef).catch(e => {
+                            showModal("Error", "Could not delete game.");
+                            console.error("Error deleting:", e);
+                        });
+                    };
                 }
 
 
                 // Update status and info
                 let statusText = '';
-                let infoText = `Game ID: ${gameId}`;
                 let isGameActive = true;
+                const playerXName = game.playerNames['X'] || 'Player X';
+                const playerOName = game.playerNames['O'] || 'Player O';
+                let infoText = `X: ${playerXName} | O: ${playerOName}`;
 
                 if (game.status === 'waiting') {
-                    statusText = `Waiting for Player O... (Host: ${game.playerNames['X']})`;
+                    statusText = `Waiting for Player O...`;
                     isGameActive = false;
                 } else if (game.status === 'playing') {
                     const myTurn = game.currentTurn === playerSymbol;
                     statusText = myTurn ? `Your Turn (${playerSymbol})` : `Opponent's Turn (${game.currentTurn})`;
-                    infoText = `X: ${game.playerNames['X']} | O: ${game.playerNames['O']}`;
                 } else if (game.status === 'win') {
-                    statusText = `Winner: ${game.winner === playerSymbol ? 'You' : game.winner} (${game.playerNames[game.winner]})!`;
+                    const winnerName = game.playerNames[game.winner] || game.winner;
+                    statusText = `Winner: ${game.winner === playerSymbol ? 'You' : winnerName}!`;
                     isGameActive = false;
                 } else if (game.status === 'draw') {
                     statusText = 'Game Draw!';
@@ -561,7 +634,7 @@
                 }
                 
                 statusElement.textContent = statusText;
-                infoElement.innerHTML = infoText + `<br>Full ID: <span class="text-xs text-gray-400">${docSnap.id}</span>`;
+                infoElement.innerHTML = infoText;
 
                 // Render board
                 boardContainer.innerHTML = '';
@@ -569,7 +642,8 @@
                     const cellEl = document.createElement('div');
                     cellEl.className = `tttoe-cell ${cell ? 'occupied' : ''} ${cell === 'X' ? 'text-blue-500' : (cell === 'O' ? 'text-red-500' : 'text-gray-900')}`;
                     cellEl.textContent = cell || '';
-                    cellEl.onclick = () => makeTicTacToeMove(gameId, game, index, playerSymbol, isGameActive);
+                    // Pass the whole docSnap data to the move handler
+                    cellEl.onclick = () => makeTicTacToeMove(gameRef, game, index, playerSymbol, isGameActive); 
                     boardContainer.appendChild(cellEl);
                 });
             }, (error) => {
@@ -578,7 +652,16 @@
             });
         }
 
-        async function makeTicTacToeMove(gameId, game, index, playerSymbol, isGameActive) {
+        function checkWinner(board, player) {
+            const combos = [
+                [0, 1, 2], [3, 4, 5], [6, 7, 8], // Rows
+                [0, 3, 6], [1, 4, 7], [2, 5, 8], // Columns
+                [0, 4, 8], [2, 4, 6]             // Diagonals
+            ];
+            return combos.some(combo => combo.every(index => board[index] === player));
+        }
+
+        async function makeTicTacToeMove(gameRef, game, index, playerSymbol, isGameActive) {
             if (!isGameActive || !playerSymbol) {
                 if (!playerSymbol) showModal("Spectator Mode", "You are not a player in this game.");
                 return;
@@ -596,34 +679,17 @@
             let newStatus = 'playing';
             let newWinner = null;
             
-            // Check for win condition
-            const winningCombos = [
-                [0, 1, 2], [3, 4, 5], [6, 7, 8], // Rows
-                [0, 3, 6], [1, 4, 7], [2, 5, 8], // Columns
-                [0, 4, 8], [2, 4, 6]             // Diagonals
-            ];
-
-            for (const combo of winningCombos) {
-                if (newBoard[combo[0]] && newBoard[combo[0]] === newBoard[combo[1]] && newBoard[combo[0]] === newBoard[combo[2]]) {
-                    newStatus = 'win';
-                    newWinner = playerSymbol;
-                    break;
-                }
-            }
-
-            // Check for draw
-            if (newStatus !== 'win' && newBoard.every(cell => cell !== null)) {
+            if (checkWinner(newBoard, playerSymbol)) {
+                newStatus = 'win';
+                newWinner = playerSymbol;
+            } else if (newBoard.every(cell => cell !== null)) {
                 newStatus = 'draw';
             }
-
-            const path = getCollectionPath(TTTOE_COLLECTION);
-            if (!path) return;
-            const gameRef = doc(db, path, gameId);
 
             try {
                 await updateDoc(gameRef, {
                     board: newBoard,
-                    currentTurn: playerSymbol === 'X' ? 'O' : 'X',
+                    currentTurn: newStatus === 'playing' ? (playerSymbol === 'X' ? 'O' : 'X') : null,
                     status: newStatus,
                     winner: newWinner,
                 });
@@ -648,35 +714,44 @@
             highScore: null,
             highScoreDocId: null,
         };
+        let isSavingScore = false; // Flag to prevent multiple saves
 
         function setupMemoryGame() {
             const symbols = ['🍎', '🍌', '🥝', '🍉', '🍍', '🥭', '🍇', '🍓'];
             let tiles = [...symbols, ...symbols]
-                .sort(() => 0.5 - Math.random()) // Shuffle
+                .sort(() => 0.5 - Math.random()) 
                 .map((symbol, id) => ({ id, symbol, isFlipped: false, isMatched: false }));
 
             memoryGame = {
+                ...memoryGame, // Keep high score properties
                 tiles,
                 moves: 0,
                 flipped: [],
                 matched: [],
                 gameActive: true,
-                highScore: memoryGame.highScore, // Preserve high score
-                highScoreDocId: memoryGame.highScoreDocId, // Preserve doc ID
             };
         }
 
         function renderMemoryGame(container) {
-            container.innerHTML = `
+             if (currentUser.isAnonymous) {
+                container.innerHTML = `<div class="text-center p-8 bg-yellow-100 rounded-xl shadow-lg border-yellow-300 border-l-4">
+                        <h3 class="text-xl font-bold text-yellow-800 mb-4">Login for Persistent Scores</h3>
+                        <p class="text-gray-600 mb-4">You can play, but your high score will not be saved unless you <a href="#/auth" class="text-blue-600 font-semibold hover:underline">log in or sign up</a>.</p>
+                        <button onclick="navigate('home')" class="bg-gray-400 text-white font-semibold py-2 px-4 rounded-lg hover:bg-gray-500 transition">Go Back</button>
+                    </div><div class="mt-8" id="memory-game-content"></div>`;
+                container = document.getElementById('memory-game-content');
+            }
+            
+            container.innerHTML += `
                 <div class="max-w-3xl mx-auto p-6 bg-white rounded-xl shadow-2xl border border-green-100 text-center">
                     <h2 class="text-3xl font-extrabold mb-4 text-green-600">Memory Match</h2>
-                    <div class="flex justify-between items-center mb-6 text-gray-700 font-semibold text-lg">
+                    <div class="flex justify-between items-center mb-6 text-gray-700 font-semibold text-lg flex-wrap">
                         <span id="memory-moves">Moves: 0</span>
-                        <span id="memory-score">High Score: N/A</span>
+                        <span id="memory-score" class="text-green-700">High Score: ...</span>
                     </div>
 
-                    <div id="memory-board" class="grid grid-cols-4 md:grid-cols-6 gap-3 mx-auto max-w-lg">
-                        <!-- Tiles render here -->
+                    <div id="memory-board" class="grid grid-cols-4 sm:grid-cols-6 gap-3 mx-auto max-w-lg">
+                        <p class="col-span-4 sm:col-span-6 text-gray-500 pt-4">Click Start to begin!</p>
                     </div>
 
                     <div id="game-message" class="mt-6 text-xl font-bold text-red-500"></div>
@@ -694,7 +769,6 @@
             };
 
             listenForHighScore();
-            renderMemoryBoard(); // Initial render
         }
 
         function renderMemoryBoard() {
@@ -704,6 +778,16 @@
             boardContainer.innerHTML = '';
             document.getElementById('memory-moves').textContent = `Moves: ${memoryGame.moves}`;
             
+            const scoreEl = document.getElementById('memory-score');
+            if (scoreEl) {
+                scoreEl.textContent = `High Score: ${memoryGame.highScore !== null ? memoryGame.highScore + ' Moves' : (currentUser.isAnonymous ? 'N/A (Guest)' : 'N/A')}`;
+            }
+
+            if (memoryGame.tiles.length === 0) {
+                 boardContainer.innerHTML = '<p class="col-span-4 sm:col-span-6 text-gray-500 pt-4">Click Start to begin!</p>';
+                 return;
+            }
+
             memoryGame.tiles.forEach(tile => {
                 const tileEl = document.createElement('div');
                 tileEl.className = `memory-tile ${tile.isFlipped ? 'flipped' : ''} ${tile.isMatched ? 'matched' : ''}`;
@@ -711,11 +795,9 @@
 
                 tileEl.innerHTML = `<div class="memory-tile-inner">${tile.symbol}</div>`;
                 
-                // Show question mark face when not flipped/matched
                 if (!tile.isFlipped && !tile.isMatched) {
-                    tileEl.innerHTML = `<div class="memory-tile-inner transform-none">❓</div>`;
+                    tileEl.innerHTML = `<div class="memory-tile-inner transform-none text-3xl">❓</div>`;
                 }
-
 
                 tileEl.onclick = () => handleTileClick(tile.id);
                 boardContainer.appendChild(tileEl);
@@ -731,10 +813,7 @@
             const tileIndex = memoryGame.tiles.findIndex(t => t.id === id);
             const tile = memoryGame.tiles[tileIndex];
 
-            // Ignore if already flipped, matched, or if two are already flipped
-            if (tile.isFlipped || tile.isMatched || memoryGame.flipped.length === 2) {
-                return;
-            }
+            if (tile.isFlipped || tile.isMatched || memoryGame.flipped.length === 2) return;
 
             tile.isFlipped = true;
             memoryGame.flipped.push(tile);
@@ -751,7 +830,6 @@
                     memoryGame.matched.push(tile1, tile2);
                     memoryGame.flipped = [];
                     
-                    // Check for win
                     if (memoryGame.matched.length === memoryGame.tiles.length) {
                         endMemoryGame();
                     }
@@ -781,34 +859,39 @@
         }
 
         async function listenForHighScore() {
-            const path = getCollectionPath(MEMORY_SCORE_COLLECTION, false, userId);
-            if (!path) {
-                 document.getElementById('memory-score').textContent = `High Score: Log in!`;
-                 return;
-            }
+            if (currentUser.isAnonymous) return;
+            const path = getCollectionPath(MEMORY_SCORE_COLLECTION, false);
+            if (!path) return;
+
+            // Use onSnapshot for a simple query to fetch the single score document
+            const q = query(collection(db, path)); // Query entire private collection
             
-            // Query for high score document (there should be only one per user)
-            const q = query(collection(db, path), where("userId", "==", userId));
-            
-            const snapshot = await getDocs(q);
-            if (!snapshot.empty) {
-                const docSnap = snapshot.docs[0];
-                memoryGame.highScore = docSnap.data().highScore;
-                memoryGame.highScoreDocId = docSnap.id;
-            } else {
-                 memoryGame.highScore = null;
-                 memoryGame.highScoreDocId = null;
-            }
-            document.getElementById('memory-score').textContent = `High Score: ${memoryGame.highScore !== null ? memoryGame.highScore + ' Moves' : 'N/A'}`;
+            UNSUBSCRIBE_HANDLERS['memory-score'] = onSnapshot(q, (snapshot) => {
+                 if (!snapshot.empty) {
+                    const docSnap = snapshot.docs[0];
+                    memoryGame.highScore = docSnap.data().highScore;
+                    memoryGame.highScoreDocId = docSnap.id;
+                } else {
+                    memoryGame.highScore = null;
+                    memoryGame.highScoreDocId = null;
+                }
+                renderMemoryBoard(); // Update the displayed score
+            }, (error) => {
+                console.error("Memory Score Stream Error:", error);
+            });
         }
 
         async function checkAndSaveHighScore(moves) {
-            const path = getCollectionPath(MEMORY_SCORE_COLLECTION, false, userId);
-            if (!path) return;
+            if (isSavingScore) return;
+            isSavingScore = true;
+            
+            const path = getCollectionPath(MEMORY_SCORE_COLLECTION, false);
+            if (!path) {
+                isSavingScore = false;
+                return;
+            }
 
             const currentScore = memoryGame.highScore;
-            
-            // Score comparison logic: Lower moves is a better score
             const isNewHighScore = currentScore === null || moves < currentScore;
 
             if (isNewHighScore) {
@@ -819,33 +902,627 @@
                 };
 
                 try {
+                    const collectionRef = collection(db, path);
                     if (memoryGame.highScoreDocId) {
                         // Update existing document
                         const docRef = doc(db, path, memoryGame.highScoreDocId);
                         await updateDoc(docRef, scoreData);
                     } else {
-                        // Create new document (since we only query for one, we assume we just add it to the collection)
-                        const newDocRef = await addDoc(collection(db, path), scoreData);
-                        memoryGame.highScoreDocId = newDocRef.id;
+                        // Create new document (we expect only one per user in the private collection)
+                        await addDoc(collectionRef, scoreData);
                     }
 
-                    memoryGame.highScore = moves;
-                    document.getElementById('memory-score').textContent = `High Score: ${moves} Moves`;
                     document.getElementById('game-message').textContent = `⭐ New High Score: ${moves} Moves! ⭐`;
                 } catch (error) {
-                    showModal("Score Save Failed", "Could not save high score to Firebase.");
+                    showModal("Score Save Failed", "Could not save high score to Firebase. Check if security rules allow writes.");
                     console.error("Error saving score:", error);
                 }
-            } else {
-                 document.getElementById('game-message').textContent = `Completed in ${moves} moves. Best is still ${currentScore} moves.`;
+            } 
+            isSavingScore = false;
+        }
+
+
+        // ----------------------------------------------------
+        // --- GAME 3: GOLD MINER (Single Player, Persistent Private Data) ---
+        // ----------------------------------------------------
+
+        const MINER_COLLECTION = 'miner_data';
+        let minerState = {
+            gold: 0,
+            clickPower: 1,
+            goldPerSecond: 0,
+            upgrades: {
+                pickaxe: 0, // Click Power upgrade
+                worker: 0  // GPS upgrade
+            },
+            saveDocId: null
+        };
+        let lastUpdateTime = Date.now();
+        let gameLoopInterval = null;
+
+        const UPGRADE_COSTS = {
+            pickaxe: level => Math.round(10 * Math.pow(1.5, level)),
+            worker: level => Math.round(20 * Math.pow(1.7, level))
+        };
+        const UPGRADE_BONUS = {
+            pickaxe: 1, // +1 click power
+            worker: 0.5 // +0.5 gold per second
+        };
+
+        function calculateGPS() {
+            return minerState.upgrades.worker * UPGRADE_BONUS.worker;
+        }
+        function calculateClickPower() {
+            return 1 + (minerState.upgrades.pickaxe * UPGRADE_BONUS.pickaxe);
+        }
+
+        function renderGoldMiner(container) {
+             if (currentUser.isAnonymous) {
+                container.innerHTML = `<div class="text-center p-8 bg-yellow-100 rounded-xl shadow-lg border-yellow-300 border-l-4">
+                        <h3 class="text-xl font-bold text-yellow-800 mb-4">Login for Persistent Save</h3>
+                        <p class="text-gray-600 mb-4">You can play, but your progress will not be saved unless you <a href="#/auth" class="text-blue-600 font-semibold hover:underline">log in or sign up</a>.</p>
+                        <button onclick="navigate('home')" class="bg-gray-400 text-white font-semibold py-2 px-4 rounded-lg hover:bg-gray-500 transition">Go Back</button>
+                    </div><div class="mt-8" id="miner-game-content"></div>`;
+                container = document.getElementById('miner-game-content');
+            }
+            
+            container.innerHTML += `
+                <div class="max-w-2xl mx-auto p-6 bg-white rounded-xl shadow-2xl border border-amber-100 text-center">
+                    <h2 class="text-3xl font-extrabold mb-4 text-amber-600">Gold Miner Clicker</h2>
+                    <p class="text-gray-500 mb-6">Mine gold and buy upgrades for more gold per second (GPS).</p>
+                    
+                    <div class="flex justify-around items-center bg-amber-50 p-4 rounded-lg mb-6 border border-amber-200">
+                        <div class="text-center">
+                            <div id="gold-display" class="text-4xl font-extrabold text-gray-800">0 Gold</div>
+                            <span class="text-sm text-gray-600">Total Gold</span>
+                        </div>
+                        <div class="text-center">
+                            <div id="gps-display" class="text-2xl font-bold text-amber-700">0.0 GPS</div>
+                            <span class="text-sm text-gray-600">Gold per Second</span>
+                        </div>
+                    </div>
+                    
+                    <button id="miner-btn" class="text-white text-3xl font-bold py-6 px-12 rounded-xl transition shadow-lg w-full mb-8" onclick="mineGold()">
+                        ⛏️ Click to Mine (+1)
+                    </button>
+                    
+                    <h3 class="text-2xl font-bold mb-4 text-gray-800">Upgrades</h3>
+                    <div id="upgrades-container" class="space-y-3">
+                        <!-- Upgrade buttons render here -->
+                    </div>
+                </div>
+            `;
+            
+            listenForMinerData();
+            startGameLoop();
+        }
+        
+        function startGameLoop() {
+            if (gameLoopInterval) clearInterval(gameLoopInterval);
+            gameLoopInterval = setInterval(gameLoop, 1000 / 10); // Run 10 times per second for smooth FPS
+        }
+        
+        function gameLoop() {
+            const now = Date.now();
+            const elapsedSeconds = (now - lastUpdateTime) / 1000;
+            lastUpdateTime = now;
+
+            if (minerState.goldPerSecond > 0) {
+                const goldIncrease = minerState.goldPerSecond * elapsedSeconds;
+                minerState.gold += goldIncrease;
+                renderMinerUI();
+            }
+            
+            // Save state every 5 seconds (or more frequently if desired)
+            if (now - lastSaveTime > 5000 && !currentUser.isAnonymous) {
+                saveMinerData();
+                lastSaveTime = now;
             }
         }
+        let lastSaveTime = Date.now();
+
+
+        function renderMinerUI() {
+            // Update displayed values
+            minerState.clickPower = calculateClickPower();
+            minerState.goldPerSecond = calculateGPS();
+
+            const gold = Math.floor(minerState.gold);
+            document.getElementById('gold-display').textContent = `${gold.toLocaleString()} Gold`;
+            document.getElementById('gps-display').textContent = `${minerState.goldPerSecond.toFixed(1)} GPS`;
+            document.getElementById('miner-btn').innerHTML = `⛏️ Click to Mine (+${minerState.clickPower})`;
+            
+            const upgradesContainer = document.getElementById('upgrades-container');
+            if (!upgradesContainer) return;
+            upgradesContainer.innerHTML = `
+                <!-- Pickaxe Upgrade -->
+                <button onclick="buyUpgrade('pickaxe')" class="flex justify-between items-center w-full p-3 rounded-lg shadow transition bg-white hover:bg-gray-100 border border-gray-200 disabled:opacity-50" ${gold < UPGRADE_COSTS.pickaxe(minerState.upgrades.pickaxe) ? 'disabled' : ''}>
+                    <span class="text-left">
+                        <span class="font-bold text-gray-800">Better Pickaxe (Lvl ${minerState.upgrades.pickaxe})</span><br>
+                        <span class="text-sm text-gray-600">Click Power: +${UPGRADE_BONUS.pickaxe}</span>
+                    </span>
+                    <span class="font-bold text-amber-700">${UPGRADE_COSTS.pickaxe(minerState.upgrades.pickaxe).toLocaleString()} Gold</span>
+                </button>
+                
+                <!-- Worker Upgrade -->
+                <button onclick="buyUpgrade('worker')" class="flex justify-between items-center w-full p-3 rounded-lg shadow transition bg-white hover:bg-gray-100 border border-gray-200 disabled:opacity-50" ${gold < UPGRADE_COSTS.worker(minerState.upgrades.worker) ? 'disabled' : ''}>
+                    <span class="text-left">
+                        <span class="font-bold text-gray-800">Hire Worker (Lvl ${minerState.upgrades.worker})</span><br>
+                        <span class="text-sm text-gray-600">GPS: +${UPGRADE_BONUS.worker}</span>
+                    </span>
+                    <span class="font-bold text-amber-700">${UPGRADE_COSTS.worker(minerState.upgrades.worker).toLocaleString()} Gold</span>
+                </button>
+            `;
+        }
+        
+        function mineGold() {
+            minerState.gold += minerState.clickPower;
+            renderMinerUI();
+            // Immediate save on click if anonymous, otherwise rely on loop save
+            if (currentUser.isAnonymous) {
+                 // Nothing to save anonymously, just update UI
+            } else {
+                 // Save for persistent anonymous state if needed, but we rely on login for persistence
+            }
+        }
+
+        function buyUpgrade(type) {
+            const currentLevel = minerState.upgrades[type];
+            const cost = UPGRADE_COSTS[type](currentLevel);
+            
+            if (minerState.gold >= cost) {
+                minerState.gold -= cost;
+                minerState.upgrades[type]++;
+                renderMinerUI();
+                if (!currentUser.isAnonymous) {
+                     saveMinerData(); // Immediate save on purchase
+                }
+            } else {
+                showModal("Cannot Afford", `You need ${cost.toLocaleString()} Gold to buy this upgrade.`);
+            }
+        }
+
+        async function listenForMinerData() {
+            if (currentUser.isAnonymous) {
+                minerState = { ...minerState, gold: 0, clickPower: 1, goldPerSecond: 0, upgrades: { pickaxe: 0, worker: 0 } };
+                renderMinerUI();
+                return;
+            }
+            
+            const path = getCollectionPath(MINER_COLLECTION, false);
+            if (!path) return;
+
+            const q = query(collection(db, path));
+            
+            UNSUBSCRIBE_HANDLERS['miner-data'] = onSnapshot(q, (snapshot) => {
+                 if (!snapshot.empty) {
+                    const docSnap = snapshot.docs[0];
+                    const data = docSnap.data();
+                    
+                    // Restore state, handling potential new fields gracefully
+                    minerState.gold = data.gold || 0;
+                    minerState.upgrades = data.upgrades || { pickaxe: 0, worker: 0 };
+                    minerState.saveDocId = docSnap.id;
+                    
+                    // Compensate for offline time
+                    if (data.lastUpdated) {
+                        const timeOffline = (Date.now() - new Date(data.lastUpdated).getTime()) / 1000;
+                        if (timeOffline > 0 && minerState.goldPerSecond > 0) {
+                             const idleGold = timeOffline * calculateGPS();
+                             minerState.gold += idleGold;
+                             showModal("Welcome Back, Miner!", `You earned ${Math.floor(idleGold).toLocaleString()} gold while you were away!`);
+                        }
+                    }
+                }
+                lastUpdateTime = Date.now();
+                renderMinerUI(); // Initial render after loading data
+            }, (error) => {
+                console.error("Miner Data Stream Error:", error);
+            });
+        }
+
+        async function saveMinerData() {
+            if (currentUser.isAnonymous) return;
+            const path = getCollectionPath(MINER_COLLECTION, false);
+            if (!path) return;
+
+            const dataToSave = {
+                userId: userId,
+                gold: minerState.gold, // Save the float value
+                upgrades: minerState.upgrades,
+                lastUpdated: new Date().toISOString()
+            };
+
+            try {
+                const collectionRef = collection(db, path);
+                if (minerState.saveDocId) {
+                    const docRef = doc(db, path, minerState.saveDocId);
+                    await updateDoc(docRef, dataToSave);
+                } else {
+                    const newDocRef = await addDoc(collectionRef, dataToSave);
+                    minerState.saveDocId = newDocRef.id;
+                }
+            } catch (error) {
+                console.error("Error saving miner data:", error);
+            }
+        }
+
+
+        // ----------------------------------------------------
+        // --- GAME 4: ROCK, PAPER, SCISSORS (Multiplayer, Public Data) ---
+        // ----------------------------------------------------
+
+        const RPS_COLLECTION = 'rps_games';
+        const RPS_CHOICES = {
+            'rock': { icon: '🪨', color: 'bg-red-500' },
+            'paper': { icon: '📄', color: 'bg-green-500' },
+            'scissors': { icon: '✂️', color: 'bg-blue-500' }
+        };
+        const RPS_WIN_CONDITIONS = {
+            'rock': 'scissors',
+            'paper': 'rock',
+            'scissors': 'paper'
+        };
+
+        function renderRPSLobby(container) {
+            if (currentUser.isAnonymous) {
+                container.innerHTML = `
+                    <div class="text-center p-8 bg-yellow-100 rounded-xl shadow-lg border-yellow-300 border-l-4">
+                        <h3 class="text-xl font-bold text-yellow-800 mb-4">Multiplayer requires sign-in</h3>
+                        <p class="text-gray-600 mb-4">Please <a href="#/auth" class="text-blue-600 font-semibold hover:underline">log in or sign up</a> with Email/Password to play real-time RPS.</p>
+                        <button onclick="navigate('home')" class="bg-gray-400 text-white font-semibold py-2 px-4 rounded-lg hover:bg-gray-500 transition">Go Back</button>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = `
+                <div class="text-center mb-8">
+                    <h2 class="text-3xl font-bold text-gray-900">RPS Lobby (Commit & Reveal)</h2>
+                    <p class="text-gray-600">Create a game or find a challenger.</p>
+                </div>
+                <div class="max-w-xl mx-auto space-y-4">
+                    <button id="create-rps-btn" class="w-full bg-purple-600 text-white font-semibold py-3 rounded-lg hover:bg-purple-700 transition shadow-lg">
+                        ➕ Create New RPS Game
+                    </button>
+                    <div class="bg-white p-4 rounded-xl shadow-md">
+                        <h3 class="text-xl font-semibold mb-3">Open Challenges</h3>
+                        <div id="open-rps-list" class="space-y-2">
+                            <p class="text-gray-500 text-center">Loading open games...</p>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            document.getElementById('create-rps-btn').onclick = createRPSGame;
+            listenForOpenRPSGames();
+        }
+
+        async function createRPSGame() {
+            const path = getCollectionPath(RPS_COLLECTION, true);
+            if (!path) return;
+            const playerName = currentUser.email || `User ${userId.substring(0, 4)}`;
+
+            const newGame = {
+                status: 'waiting', // 'waiting', 'playing', 'reveal', 'done'
+                player1Id: userId,
+                player2Id: null,
+                player1Name: playerName,
+                player2Name: null,
+                player1Commit: null, // Hashed choice before reveal
+                player2Commit: null,
+                player1Choice: null, // Revealed choice
+                player2Choice: null,
+                winner: null,
+                round: 1,
+                createdAt: new Date().toISOString(),
+            };
+
+            try {
+                const docRef = await addDoc(collection(db, path), newGame);
+                navigate('rps', { id: docRef.id });
+            } catch (error) {
+                showModal("Game Creation Failed", "Could not create game session. Check console for details.");
+                console.error("Error creating RPS game:", error);
+            }
+        }
+        
+        function listenForOpenRPSGames() {
+            const path = getCollectionPath(RPS_COLLECTION, true);
+            if (!path) return;
+
+            const q = query(collection(db, path), where("status", "==", "waiting"));
+            const listContainer = document.getElementById('open-rps-list');
+
+            UNSUBSCRIBE_HANDLERS['rps-lobby'] = onSnapshot(q, (snapshot) => {
+                listContainer.innerHTML = '';
+                let hasGames = false;
+
+                snapshot.forEach(doc => {
+                    const game = doc.data();
+                    if (game.player1Id !== userId) { 
+                        hasGames = true;
+                        const gameElement = document.createElement('div');
+                        gameElement.className = 'flex justify-between items-center bg-gray-50 p-3 rounded-lg border';
+                        gameElement.innerHTML = `
+                            <span class="font-medium text-gray-700">Host: ${game.player1Name}</span>
+                            <button onclick="joinRPSGame('${doc.id}')" class="bg-blue-500 text-white text-sm font-semibold py-1 px-3 rounded-md hover:bg-blue-600 transition">
+                                Join
+                            </button>
+                        `;
+                        listContainer.appendChild(gameElement);
+                    }
+                });
+                
+                if (!hasGames) {
+                    listContainer.innerHTML = '<p class="text-gray-500 text-center p-4">No open games found. Be the first to create one!</p>';
+                }
+            });
+        }
+
+        async function joinRPSGame(gameId) {
+            const path = getCollectionPath(RPS_COLLECTION, true);
+            if (!path) return;
+
+            const gameRef = doc(db, path, gameId);
+            const playerName = currentUser.email || `User ${userId.substring(0, 4)}`;
+
+            try {
+                await updateDoc(gameRef, {
+                    player2Id: userId,
+                    player2Name: playerName,
+                    status: 'playing',
+                });
+                navigate('rps', { id: gameId });
+            } catch (error) {
+                showModal("Joining Failed", "Could not join this game. It might have just filled up.");
+                console.error("Error joining game:", error);
+            }
+        }
+
+        function renderRPSGame(container, gameId) {
+             container.innerHTML = `
+                <div class="max-w-xl mx-auto p-6 bg-white rounded-xl shadow-2xl border border-purple-100 text-center">
+                    <h2 class="text-3xl font-extrabold mb-4 text-purple-600">Rock, Paper, Scissors</h2>
+                    <div id="rps-status" class="text-xl font-semibold mb-4 text-gray-800">Loading Game...</div>
+                    <div id="rps-info" class="text-sm text-gray-500 mb-6"></div>
+                    
+                    <!-- Player choices display -->
+                    <div class="flex justify-around items-center mb-6">
+                        <div class="text-center">
+                            <span class="text-lg font-bold text-gray-700" id="p1-name">...</span>
+                            <div class="text-6xl p-4 bg-gray-100 rounded-lg mt-2" id="p1-choice-display">?</div>
+                        </div>
+                        <span class="text-4xl font-extrabold text-purple-600">VS</span>
+                        <div class="text-center">
+                            <span class="text-lg font-bold text-gray-700" id="p2-name">...</span>
+                            <div class="text-6xl p-4 bg-gray-100 rounded-lg mt-2" id="p2-choice-display">?</div>
+                        </div>
+                    </div>
+                    
+                    <div id="rps-action-area" class="mt-8">
+                        <!-- Action buttons/choices render here -->
+                    </div>
+
+                    <button onclick="navigate('rps-lobby')" class="mt-8 bg-gray-500 text-white font-semibold py-2 px-4 rounded-lg hover:bg-gray-600 transition shadow">
+                        ← Back to Lobby
+                    </button>
+                </div>
+            `;
+            listenForRPSUpdates(gameId);
+        }
+        
+        async function sha256(str) {
+            const buffer = new TextEncoder("utf-8").encode(str);
+            const hash = await crypto.subtle.digest("SHA-256", buffer);
+            const hashArray = Array.from(new Uint8Array(hash));
+            const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+            return hashHex;
+        }
+
+        function listenForRPSUpdates(gameId) {
+            const path = getCollectionPath(RPS_COLLECTION, true);
+            if (!path) return;
+
+            const gameRef = doc(db, path, gameId);
+            const statusEl = document.getElementById('rps-status');
+            const infoEl = document.getElementById('rps-info');
+            const actionArea = document.getElementById('rps-action-area');
+            const p1NameEl = document.getElementById('p1-name');
+            const p2NameEl = document.getElementById('p2-name');
+            const p1Display = document.getElementById('p1-choice-display');
+            const p2Display = document.getElementById('p2-choice-display');
+
+            UNSUBSCRIBE_HANDLERS['rps-game'] = onSnapshot(gameRef, (docSnap) => {
+                if (!docSnap.exists()) {
+                    showModal("Game Ended", "This game session was deleted.");
+                    navigate('rps-lobby');
+                    return;
+                }
+                const game = docSnap.data();
+                const isP1 = game.player1Id === userId;
+                const playerCommit = isP1 ? game.player1Commit : game.player2Commit;
+                const opponentCommit = isP1 ? game.player2Commit : game.player1Commit;
+                const playerChoice = isP1 ? game.player1Choice : game.player2Choice;
+                const opponentChoice = isP1 ? game.player2Choice : game.player1Choice;
+                
+                p1NameEl.textContent = game.player1Name;
+                p2NameEl.textContent = game.player2Name || 'Challenger';
+                infoEl.textContent = `Round: ${game.round} | ID: ${gameId}`;
+                
+                p1Display.textContent = playerChoice ? RPS_CHOICES[playerChoice].icon : (game.player1Commit ? '🔒' : '?');
+                p2Display.textContent = opponentChoice ? RPS_CHOICES[opponentChoice].icon : (game.player2Commit ? '🔒' : '?');
+                
+                p1Display.className = `text-6xl p-4 rounded-lg mt-2 ${playerChoice ? RPS_CHOICES[playerChoice].color : 'bg-gray-100'}`;
+                p2Display.className = `text-6xl p-4 rounded-lg mt-2 ${opponentChoice ? RPS_CHOICES[opponentChoice].color : 'bg-gray-100'}`;
+                
+                // State Machine
+                if (game.status === 'waiting') {
+                    statusEl.textContent = 'Waiting for second player...';
+                    actionArea.innerHTML = '';
+                } else if (game.status === 'playing') {
+                    if (playerCommit) {
+                        statusEl.textContent = 'Choice committed. Waiting for opponent...';
+                        actionArea.innerHTML = `<button onclick="revealRPSChoice('${gameId}', '${playerChoice}', '${playerCommit}', ${isP1})" class="w-full bg-orange-500 text-white font-semibold py-3 rounded-lg hover:bg-orange-600 transition shadow-md">
+                            ${opponentCommit ? 'Click to REVEAL (Opponent ready!)' : 'Waiting for opponent to commit...'}
+                        </button>`;
+                    } else {
+                        statusEl.textContent = 'Choose your move:';
+                        renderRPSChoices(gameId, isP1, actionArea);
+                    }
+                } else if (game.status === 'reveal') {
+                    if (playerChoice) {
+                        statusEl.textContent = `Waiting for opponent to reveal...`;
+                    } else {
+                        statusEl.textContent = 'REVEAL your choice!';
+                        actionArea.innerHTML = `<button onclick="revealRPSChoice('${gameId}', '${playerChoice}', '${playerCommit}', ${isP1})" class="w-full bg-orange-500 text-white font-semibold py-3 rounded-lg hover:bg-orange-600 transition shadow-md">
+                            Click to REVEAL
+                        </button>`;
+                    }
+                } else if (game.status === 'done') {
+                    let resultText = '';
+                    if (game.winner === 'draw') {
+                        resultText = 'Draw!';
+                    } else if (game.winner === userId) {
+                        resultText = 'You Win the Round!';
+                    } else {
+                        resultText = `${game.winner === game.player1Id ? game.player1Name : game.player2Name} Wins!`;
+                    }
+                    statusEl.textContent = resultText;
+                    actionArea.innerHTML = `<button onclick="resetRPSGame('${gameId}')" class="w-full bg-green-600 text-white font-semibold py-3 rounded-lg hover:bg-green-700 transition shadow-md">
+                        Start Next Round
+                    </button>`;
+                }
+            });
+        }
+        
+        function renderRPSChoices(gameId, isP1, container) {
+            container.innerHTML = `
+                <div class="flex justify-around space-x-2">
+                    ${Object.keys(RPS_CHOICES).map(choice => `
+                        <button onclick="commitRPSChoice('${gameId}', '${choice}', ${isP1})" class="rps-choice bg-white shadow-md hover:shadow-lg">
+                            <div class="text-5xl">${RPS_CHOICES[choice].icon}</div>
+                            <span class="text-sm font-semibold capitalize">${choice}</span>
+                        </button>
+                    `).join('')}
+                </div>
+            `;
+        }
+
+        async function commitRPSChoice(gameId, choice, isP1) {
+            const path = getCollectionPath(RPS_COLLECTION, true);
+            if (!path) return;
+            const gameRef = doc(db, path, gameId);
+            
+            // Generate a random salt for better security
+            const salt = Math.random().toString(36).substring(2, 15);
+            const commitHash = await sha256(choice + salt);
+            
+            const fieldCommit = isP1 ? 'player1Commit' : 'player2Commit';
+            const fieldChoice = isP1 ? 'player1Choice' : 'player2Choice';
+            
+            try {
+                // We save the unhashed choice locally for the user to reveal later
+                localStorage.setItem(`rps_choice_${gameId}`, choice);
+                localStorage.setItem(`rps_salt_${gameId}`, salt);
+
+                await updateDoc(gameRef, {
+                    [fieldCommit]: commitHash,
+                    [fieldChoice]: null, // Clear previous choice if restarting round
+                });
+            } catch(e) {
+                showModal("Commit Failed", "Could not commit choice. Try again.");
+                console.error("RPS Commit Error:", e);
+            }
+        }
+        
+        async function revealRPSChoice(gameId, choice, commit, isP1) {
+            const path = getCollectionPath(RPS_COLLECTION, true);
+            if (!path) return;
+            const gameRef = doc(db, path, gameId);
+            
+            // Retrieve the stored choice and salt
+            const storedChoice = localStorage.getItem(`rps_choice_${gameId}`);
+            const storedSalt = localStorage.getItem(`rps_salt_${gameId}`);
+
+            if (!storedChoice || !storedSalt) {
+                showModal("Error", "Could not find your committed choice. You may need to start a new round.");
+                return;
+            }
+
+            const fieldChoice = isP1 ? 'player1Choice' : 'player2Choice';
+            const fieldCommit = isP1 ? 'player1Commit' : 'player2Commit';
+            const fieldOpponentChoice = isP1 ? 'player2Choice' : 'player1Choice';
+            
+            // Update the game document with the revealed choice and change status if opponent is ready
+            const updateData = {
+                [fieldChoice]: storedChoice,
+                status: 'reveal' // Set to reveal state
+            };
+            
+            try {
+                await updateDoc(gameRef, updateData);
+                
+                // After reveal, check if opponent has also revealed
+                const currentGameState = (await getDoc(gameRef)).data();
+                
+                if (currentGameState.player1Choice && currentGameState.player2Choice) {
+                    determineRPSWinner(gameRef, currentGameState);
+                }
+                
+            } catch(e) {
+                showModal("Reveal Failed", "Could not reveal choice. Try again.");
+                console.error("RPS Reveal Error:", e);
+            }
+        }
+        
+        function determineRPSWinner(gameRef, game) {
+            const p1c = game.player1Choice;
+            const p2c = game.player2Choice;
+            let winnerId = 'draw';
+            
+            if (p1c === p2c) {
+                winnerId = 'draw';
+            } else if (RPS_WIN_CONDITIONS[p1c] === p2c) {
+                winnerId = game.player1Id; // P1 Wins
+            } else {
+                winnerId = game.player2Id; // P2 Wins
+            }
+            
+            updateDoc(gameRef, {
+                winner: winnerId,
+                status: 'done'
+            }).catch(e => console.error("Error setting winner:", e));
+        }
+
+        async function resetRPSGame(gameId) {
+            const path = getCollectionPath(RPS_COLLECTION, true);
+            if (!path) return;
+            const gameRef = doc(db, path, gameId);
+            
+            try {
+                await updateDoc(gameRef, {
+                    status: 'playing',
+                    player1Commit: null,
+                    player2Commit: null,
+                    player1Choice: null,
+                    player2Choice: null,
+                    winner: null,
+                    round: (await getDoc(gameRef)).data().round + 1,
+                });
+                localStorage.removeItem(`rps_choice_${gameId}`);
+                localStorage.removeItem(`rps_salt_${gameId}`);
+            } catch(e) {
+                showModal("Reset Failed", "Could not reset game. Try refreshing.");
+                console.error("RPS Reset Error:", e);
+            }
+        }
+
 
         // --- APPLICATION STARTUP ---
 
         window.onload = () => {
-            initializeAuth(); // Starts auth process and navigation listener
-            handleNavigation(); // Initial page load
+            initializeAuth(); 
         };
 
     </script>
